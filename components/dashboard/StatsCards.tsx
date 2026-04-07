@@ -18,13 +18,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { MOCK_FX_ENGINE_ADDRESS } from "@/constants/addresses";
+import { STABLE_FX_ADAPTER_ADDRESS } from "@/constants/addresses";
 import {
   formatCompactAddress,
   formatTokenAmount,
   TOKEN_OPTIONS,
   type TokenSymbol,
 } from "@/lib/wizpay";
+import { LiquidityManagerModal } from "./LiquidityManagerModal";
+import { Button } from "@/components/ui/button";
 
 interface StatsCardsProps {
   selectedToken: TokenSymbol;
@@ -141,14 +143,23 @@ export function StatsCards({
 
       {/* FX Engine */}
       <Card className="glass-card border-border/60">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ArrowRightLeft className="h-4 w-4 text-primary" />
-            FX Engine
-          </CardTitle>
-          <CardDescription>
-            Live liquidity snapshot for the connected WizPay routing engine.
-          </CardDescription>
+        <CardHeader className="pb-3">
+          <div className="flex flex-row justify-between items-start">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2">
+                <ArrowRightLeft className="h-4 w-4 text-primary" />
+                FX Engine
+              </CardTitle>
+              <CardDescription>
+                Live pool liquidity for WizPay routing.
+              </CardDescription>
+            </div>
+            <LiquidityManagerModal>
+              <Button variant="outline" size="sm" className="h-8 shadow-sm">
+                Manage
+              </Button>
+            </LiquidityManagerModal>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between rounded-xl border border-border/60 bg-background/50 px-3 py-2">
@@ -167,7 +178,7 @@ export function StatsCards({
             Engine:{" "}
             {fxEngineData
               ? formatCompactAddress(fxEngineData)
-              : formatCompactAddress(MOCK_FX_ENGINE_ADDRESS)}
+              : formatCompactAddress(STABLE_FX_ADAPTER_ADDRESS)}
           </p>
         </CardContent>
       </Card>

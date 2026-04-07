@@ -17,7 +17,7 @@ export function ConnectWalletCard() {
           </h1>
           <p className="text-base text-muted-foreground">
             The dashboard will read your Arc Testnet balance, routed batch
-            history, and current MockFXEngine liquidity in real time.
+            history, and current StableFX liquidity in real time.
           </p>
         </div>
         <ConnectButton />

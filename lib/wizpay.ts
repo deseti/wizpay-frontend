@@ -104,11 +104,11 @@ export function getFriendlyErrorMessage(error: unknown): string {
   }
 
   if (message.includes("exchange rate not set")) {
-    return "Swap failed. The selected token pair does not have an active route in MockFXEngine.";
+    return "Swap failed. The selected token pair does not have an active route in StableFX.";
   }
 
   if (message.includes("insufficient liquidity")) {
-    return "Swap failed. MockFXEngine does not have enough output-token liquidity for at least one recipient.";
+    return "Swap failed. StableFX does not have enough output-token liquidity for at least one recipient.";
   }
 
   if (message.includes("slippage")) {

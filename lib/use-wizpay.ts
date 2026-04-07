@@ -301,11 +301,11 @@ export function useWizPay(): WizPayState {
         const estimate = quoteSummary.estimatedAmountsOut[index] ?? 0n;
 
         if (estimate === 0n) {
-          return `No ${selectedToken} to ${recipient.targetToken} quote is available on MockFXEngine.`;
+          return `No ${selectedToken} to ${recipient.targetToken} quote is available on StableFX.`;
         }
 
         if (engineBalances[recipient.targetToken] < estimate) {
-          return `${recipient.targetToken} liquidity on MockFXEngine is too low for this row.`;
+          return `${recipient.targetToken} liquidity on StableFX is too low for this row.`;
         }
 
         return null;
