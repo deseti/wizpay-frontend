@@ -202,7 +202,7 @@ export function useWizPay(): WizPayState {
       const CHUNK_SIZE = 9999n;
       const chunkPromises = [];
 
-      for (const address of WIZPAY_HISTORY_ADDRESSES) {
+      for (const contractAddr of WIZPAY_HISTORY_ADDRESSES) {
         let from = WIZPAY_HISTORY_FROM_BLOCK;
         while (from <= currentBlock) {
           let to = from + CHUNK_SIZE;
@@ -210,7 +210,7 @@ export function useWizPay(): WizPayState {
 
           chunkPromises.push(
             publicClient!.getLogs({
-              address,
+              address: contractAddr,
               event: WIZPAY_BATCH_PAYMENT_ROUTED_EVENT,
               args: { sender: walletAddress as Address },
               fromBlock: from,
@@ -264,6 +264,9 @@ export function useWizPay(): WizPayState {
   });
 
   /* ── LP history (LiquidityAdded + LiquidityRemoved from StableFXAdapter) ── */
+  /* NOTE: LP events don't have an indexed sender/provider field, so we must
+     filter post-fetch by checking each transaction's `from` matches the
+     connected wallet. This ensures users only see their own LP activity. */
   const lpHistoryQuery = useQuery({
     queryKey: [
       "lp-history",
@@ -301,15 +304,37 @@ export function useWizPay(): WizPayState {
         from = to + 1n;
       }
 
-      const [addedLogs, removedLogs] = await Promise.all([
+      const [addedLogsRaw, removedLogsRaw] = await Promise.all([
         Promise.all(addedPromises).then((r) => r.flat()),
         Promise.all(removedPromises).then((r) => r.flat()),
       ]);
 
+      // Filter by transaction sender — LP events lack an indexed user param
+      const userAddr = walletAddress!.toLowerCase();
+      const filterByTxSender = async (logs: any[]) => {
+        if (logs.length === 0) return [];
+        const txHashes = Array.from(new Set(logs.map((l: any) => l.transactionHash as string)));
+        const txReceipts = await Promise.all(
+          txHashes.map(async (hash) => {
+            const receipt = await publicClient!.getTransactionReceipt({ hash: hash as Hex });
+            return [hash, receipt.from.toLowerCase()] as const;
+          })
+        );
+        const senderMap = new Map(txReceipts);
+        return logs.filter((l: any) => senderMap.get(l.transactionHash as string) === userAddr);
+      };
+
+      const [addedLogs, removedLogs] = await Promise.all([
+        filterByTxSender(addedLogsRaw),
+        filterByTxSender(removedLogsRaw),
+      ]);
+
       // Collect unique block numbers for timestamp lookup
       const allLogs = [...addedLogs, ...removedLogs];
+      if (allLogs.length === 0) return [];
+
       const uniqueBlocks = Array.from(
-        new Set(allLogs.map((l) => (l.blockNumber as bigint).toString()))
+        new Set(allLogs.map((l: any) => (l.blockNumber as bigint).toString()))
       );
       const blockEntries = await Promise.all(
         uniqueBlocks.map(async (bns) => {
@@ -714,6 +739,14 @@ export function useWizPay(): WizPayState {
       refetchEngineBalances();
     },
   });
+
+  /* ── Reset all history caches on wallet switch / disconnect ── */
+  useEffect(() => {
+    // When walletAddress changes (switch account or disconnect), nuke caches
+    // so the new user never sees stale data from the previous wallet.
+    queryClient.removeQueries({ queryKey: ["wizpay-history"] });
+    queryClient.removeQueries({ queryKey: ["lp-history"] });
+  }, [walletAddress, queryClient]);
 
   useEffect(() => {
     if (approvalState === "confirmed" && needsApproval) {
