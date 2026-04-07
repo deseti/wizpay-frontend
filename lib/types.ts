@@ -38,6 +38,28 @@ export interface HistoryItem {
   timestampMs: number;
 }
 
+/* ── Unified history covering all dashboard event types ── */
+export type HistoryActionType = "payroll" | "add_lp" | "remove_lp";
+
+export interface UnifiedHistoryItem {
+  type: HistoryActionType;
+  txHash: Hex;
+  blockNumber: bigint;
+  timestampMs: number;
+  /* Payroll-specific */
+  tokenIn?: Address;
+  tokenOut?: Address;
+  totalAmountIn?: bigint;
+  totalAmountOut?: bigint;
+  totalFees?: bigint;
+  recipientCount?: number;
+  referenceId?: string;
+  /* LP-specific */
+  lpToken?: Address;
+  lpAmount?: bigint;
+  lpShares?: bigint;
+}
+
 /* ── The shape returned by useWizPay() ── */
 export interface WizPayState {
   /* token selection */
@@ -80,6 +102,7 @@ export interface WizPayState {
 
   /* history */
   history: HistoryItem[];
+  unifiedHistory: UnifiedHistoryItem[];
   historyLoading: boolean;
   totalRouted: bigint;
 
@@ -100,6 +123,7 @@ export interface WizPayState {
   dismissSuccessModal: () => void;
   setStatusMessage: (msg: string | null) => void;
   setErrorMessage: (msg: string | null) => void;
+  importRecipients: (rows: RecipientDraft[]) => void;
 
   /* clipboard */
   copiedHash: Hex | null;

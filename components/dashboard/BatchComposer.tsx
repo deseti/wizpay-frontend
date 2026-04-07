@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef } from "react";
+
 import {
   AlertCircle,
   Loader2,
@@ -7,6 +9,7 @@ import {
   Rocket,
   ShieldCheck,
   Trash2,
+  Upload,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +44,7 @@ import {
   formatCompactAddress,
   formatTokenAmount,
   TOKEN_OPTIONS,
+  createRecipient,
   type RecipientDraft,
   type TokenSymbol,
 } from "@/lib/wizpay";
@@ -74,6 +78,7 @@ interface BatchComposerProps {
   handleSubmit: () => Promise<void>;
   resetComposer: () => void;
   setErrorMessage: (msg: string | null) => void;
+  importRecipients: (rows: RecipientDraft[]) => void;
 }
 
 export function BatchComposer({
@@ -105,7 +110,76 @@ export function BatchComposer({
   handleSubmit,
   resetComposer,
   setErrorMessage,
+  importRecipients,
 }: BatchComposerProps) {
+  const csvInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      // Detect and skip header row
+      const firstLine = lines[0]?.toLowerCase() ?? "";
+      const startIdx =
+        firstLine.includes("address") || firstLine.includes("wallet") ? 1 : 0;
+
+      const rows: RecipientDraft[] = [];
+      const warnings: string[] = [];
+
+      for (let i = startIdx; i < lines.length; i++) {
+        const cols = lines[i].split(",").map((c) => c.trim());
+        const [address, amount, targetToken] = cols;
+
+        if (!address?.startsWith("0x")) {
+          warnings.push(`Row ${i + 1}: Invalid address "${address}"`);
+          continue;
+        }
+        if (!amount || isNaN(parseFloat(amount))) {
+          warnings.push(`Row ${i + 1}: Invalid amount "${amount}"`);
+          continue;
+        }
+
+        const token =
+          targetToken?.toUpperCase() === "EURC" ? "EURC" : selectedToken;
+
+        rows.push({
+          ...createRecipient(token),
+          address,
+          amount,
+          targetToken: token,
+        });
+      }
+
+      if (rows.length === 0) {
+        setErrorMessage(
+          "CSV import failed: no valid rows found." +
+            (warnings.length ? " " + warnings.join("; ") : "")
+        );
+        return;
+      }
+
+      importRecipients(rows);
+
+      if (warnings.length > 0) {
+        setErrorMessage(`CSV imported ${rows.length} rows. Skipped: ${warnings.join("; ")}`);
+      }
+    };
+    reader.readAsText(file);
+
+    // Reset input so the same file can be re-uploaded
+    if (csvInputRef.current) csvInputRef.current.value = "";
+  };
+
   return (
     <Card className="glass-card border-border/60">
       <CardHeader className="soft-divider border-b border-border/50">
@@ -513,6 +587,22 @@ export function BatchComposer({
             <Plus className="h-4 w-4" />
             Add Recipient
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => csvInputRef.current?.click()}
+            disabled={isBusy}
+            className="h-10 gap-2 bg-background/60"
+          >
+            <Upload className="h-4 w-4" />
+            Upload CSV
+          </Button>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={handleCsvUpload}
+          />
           <p className="text-sm text-muted-foreground">
             Mixed payout example: send {selectedToken}, settle each row as USDC
             or EURC in the same on-chain batch.

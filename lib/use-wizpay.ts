@@ -15,11 +15,14 @@ import {
 import {
   WIZPAY_ABI,
   WIZPAY_BATCH_PAYMENT_ROUTED_EVENT,
+  LIQUIDITY_ADDED_EVENT,
+  LIQUIDITY_REMOVED_EVENT,
 } from "@/constants/abi";
 import {
   WIZPAY_ADDRESS,
   WIZPAY_HISTORY_ADDRESSES,
   WIZPAY_HISTORY_FROM_BLOCK,
+  STABLE_FX_ADAPTER_ADDRESS,
 } from "@/constants/addresses";
 import { ERC20_ABI } from "@/constants/erc20";
 import {
@@ -37,6 +40,7 @@ import {
 } from "@/lib/wizpay";
 import type {
   HistoryItem,
+  UnifiedHistoryItem,
   PreparedRecipient,
   QuoteSummary,
   StepState,
@@ -259,6 +263,89 @@ export function useWizPay(): WizPayState {
     },
   });
 
+  /* ── LP history (LiquidityAdded + LiquidityRemoved from StableFXAdapter) ── */
+  const lpHistoryQuery = useQuery({
+    queryKey: [
+      "lp-history",
+      walletAddress ?? "disconnected",
+      STABLE_FX_ADAPTER_ADDRESS,
+    ],
+    enabled: Boolean(publicClient && walletAddress),
+    queryFn: async (): Promise<UnifiedHistoryItem[]> => {
+      const currentBlock = await publicClient!.getBlockNumber();
+      const CHUNK_SIZE = 9999n;
+      const addedPromises: Promise<any[]>[] = [];
+      const removedPromises: Promise<any[]>[] = [];
+
+      let from = WIZPAY_HISTORY_FROM_BLOCK;
+      while (from <= currentBlock) {
+        let to = from + CHUNK_SIZE;
+        if (to > currentBlock) to = currentBlock;
+
+        addedPromises.push(
+          publicClient!.getLogs({
+            address: STABLE_FX_ADAPTER_ADDRESS,
+            event: LIQUIDITY_ADDED_EVENT,
+            fromBlock: from,
+            toBlock: to,
+          })
+        );
+        removedPromises.push(
+          publicClient!.getLogs({
+            address: STABLE_FX_ADAPTER_ADDRESS,
+            event: LIQUIDITY_REMOVED_EVENT,
+            fromBlock: from,
+            toBlock: to,
+          })
+        );
+        from = to + 1n;
+      }
+
+      const [addedLogs, removedLogs] = await Promise.all([
+        Promise.all(addedPromises).then((r) => r.flat()),
+        Promise.all(removedPromises).then((r) => r.flat()),
+      ]);
+
+      // Collect unique block numbers for timestamp lookup
+      const allLogs = [...addedLogs, ...removedLogs];
+      const uniqueBlocks = Array.from(
+        new Set(allLogs.map((l) => (l.blockNumber as bigint).toString()))
+      );
+      const blockEntries = await Promise.all(
+        uniqueBlocks.map(async (bns) => {
+          const bn = BigInt(bns);
+          const block = await publicClient!.getBlock({ blockNumber: bn });
+          return [bns, Number(block.timestamp) * 1000] as const;
+        })
+      );
+      const blockTs = new Map(blockEntries);
+
+      const added: UnifiedHistoryItem[] = addedLogs.map((log: any) => ({
+        type: "add_lp" as const,
+        txHash: log.transactionHash as Hex,
+        blockNumber: log.blockNumber as bigint,
+        timestampMs: blockTs.get((log.blockNumber as bigint).toString()) ?? 0,
+        lpToken: log.args.token as Address,
+        lpAmount: log.args.amountIn as bigint,
+        lpShares: log.args.sharesMinted as bigint,
+      }));
+
+      const removed: UnifiedHistoryItem[] = removedLogs.map((log: any) => ({
+        type: "remove_lp" as const,
+        txHash: log.transactionHash as Hex,
+        blockNumber: log.blockNumber as bigint,
+        timestampMs: blockTs.get((log.blockNumber as bigint).toString()) ?? 0,
+        lpToken: log.args.token as Address,
+        lpAmount: log.args.amountOut as bigint,
+        lpShares: log.args.sharesBurned as bigint,
+      }));
+
+      return [...added, ...removed].sort(
+        (a, b) => Number(b.blockNumber - a.blockNumber)
+      );
+    },
+  });
+
   /* ── derived values ── */
   const currentAllowance = allowanceData ?? 0n;
   const currentBalance = balanceData ?? 0n;
@@ -316,6 +403,27 @@ export function useWizPay(): WizPayState {
   const hasRouteIssue = rowDiagnostics.some(Boolean);
   const history = historyQuery.data ?? EMPTY_HISTORY;
 
+  // Build unified history combining payroll + LP events
+  const unifiedHistory = useMemo<UnifiedHistoryItem[]>(() => {
+    const payrollItems: UnifiedHistoryItem[] = history.map((item) => ({
+      type: "payroll" as const,
+      txHash: item.txHash,
+      blockNumber: item.blockNumber,
+      timestampMs: item.timestampMs,
+      tokenIn: item.tokenIn,
+      tokenOut: item.tokenOut,
+      totalAmountIn: item.totalAmountIn,
+      totalAmountOut: item.totalAmountOut,
+      totalFees: item.totalFees,
+      recipientCount: item.recipientCount,
+      referenceId: item.referenceId,
+    }));
+    const lpItems = lpHistoryQuery.data ?? [];
+    return [...payrollItems, ...lpItems].sort(
+      (a, b) => Number(b.blockNumber - a.blockNumber)
+    );
+  }, [history, lpHistoryQuery.data]);
+
   const totalRouted = useMemo(
     () =>
       history.reduce((total, item) => {
@@ -363,6 +471,14 @@ export function useWizPay(): WizPayState {
       return current.filter((r) => r.id !== id);
     });
   }, []);
+
+  const importRecipients = useCallback(
+    (rows: RecipientDraft[]) => {
+      setRecipients(rows);
+      setErrors({});
+    },
+    []
+  );
 
   const validate = useCallback(() => {
     const nextErrors: Record<string, string> = {};
@@ -652,7 +768,8 @@ export function useWizPay(): WizPayState {
     needsApproval,
     insufficientBalance,
     history,
-    historyLoading: historyQuery.isLoading,
+    unifiedHistory,
+    historyLoading: historyQuery.isLoading || lpHistoryQuery.isLoading,
     totalRouted,
     approvalState,
     submitState,
@@ -668,6 +785,7 @@ export function useWizPay(): WizPayState {
     dismissSuccessModal: () => setSubmitState("idle"),
     setStatusMessage,
     setErrorMessage,
+    importRecipients,
     copiedHash,
     copyHash,
     primaryActionText,

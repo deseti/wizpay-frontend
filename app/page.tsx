@@ -80,6 +80,7 @@ export default function DashboardPage() {
                 handleSubmit={wp.handleSubmit}
                 resetComposer={wp.resetComposer}
                 setErrorMessage={wp.setErrorMessage}
+                importRecipients={wp.importRecipients}
               />
 
               <PreflightPanel
@@ -104,7 +105,7 @@ export default function DashboardPage() {
             />
 
             <TransactionHistory
-              history={wp.history}
+              unifiedHistory={wp.unifiedHistory}
               isLoading={wp.historyLoading}
             />
 

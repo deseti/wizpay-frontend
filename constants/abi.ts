@@ -71,3 +71,26 @@ export const WIZPAY_ABI = [
     type: "function",
   },
 ] as const;
+
+// ── StableFXAdapter LP Events ──
+export const LIQUIDITY_ADDED_EVENT = {
+  anonymous: false,
+  inputs: [
+    { indexed: true, internalType: "address", name: "token", type: "address" },
+    { indexed: false, internalType: "uint256", name: "amountIn", type: "uint256" },
+    { indexed: false, internalType: "uint256", name: "sharesMinted", type: "uint256" },
+  ],
+  name: "LiquidityAdded",
+  type: "event",
+} as const;
+
+export const LIQUIDITY_REMOVED_EVENT = {
+  anonymous: false,
+  inputs: [
+    { indexed: true, internalType: "address", name: "token", type: "address" },
+    { indexed: false, internalType: "uint256", name: "amountOut", type: "uint256" },
+    { indexed: false, internalType: "uint256", name: "sharesBurned", type: "uint256" },
+  ],
+  name: "LiquidityRemoved",
+  type: "event",
+} as const;
