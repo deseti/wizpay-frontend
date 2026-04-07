@@ -49,27 +49,25 @@ export function DashboardHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-border/50 bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-        {/* Brand */}
-        <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-primary ring-1 ring-primary/30">
-            <ArrowRightLeft className="h-5 w-5" />
+        {/* Brand (Mobile Only) */}
+        <div className="flex md:hidden items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/30 shadow-inner">
+            <ArrowRightLeft className="h-4 w-4" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <p className="text-lg font-semibold tracking-tight">WizPay</p>
-              <Badge
-                variant="outline"
-                className="gap-1 border-emerald-500/30 text-emerald-300"
-              >
-                <span className="status-dot" />
-                Live Arc Testnet
-              </Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Mixed-token payroll routing with real-time chain telemetry
-            </p>
+            <p className="text-base font-semibold tracking-tight text-gradient leading-tight">WizPay</p>
+            <Badge
+              variant="outline"
+              className="gap-1 border-emerald-500/30 text-emerald-300 px-1 py-0 bg-emerald-500/10 text-[9px]"
+            >
+              <span className="status-dot w-1.5 h-1.5" />
+              Live
+            </Badge>
           </div>
         </div>
+        
+        {/* Spacer for desktop to push Auth to right */}
+        <div className="hidden md:block flex-1" />
 
         {/* Auth Area */}
         <div className="flex items-center gap-3">

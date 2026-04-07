@@ -25,7 +25,6 @@ import {
   TOKEN_OPTIONS,
   type TokenSymbol,
 } from "@/lib/wizpay";
-import { LiquidityManagerModal } from "./LiquidityManagerModal";
 import { Button } from "@/components/ui/button";
 
 interface StatsCardsProps {
@@ -154,11 +153,6 @@ export function StatsCards({
                 Live pool liquidity for WizPay routing.
               </CardDescription>
             </div>
-            <LiquidityManagerModal>
-              <Button variant="outline" size="sm" className="h-8 shadow-sm">
-                Manage
-              </Button>
-            </LiquidityManagerModal>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
