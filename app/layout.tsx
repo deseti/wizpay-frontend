@@ -25,6 +25,8 @@ export const metadata: Metadata = {
     "Live WizPay payroll dashboard for Arc Testnet with dark-mode batch routing, real-time balance tracking, and mixed USDC or EURC recipient settlement.",
 };
 
+import { Toaster } from "@/components/ui/toaster";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -37,6 +39,7 @@ export default function RootLayout({
     >
       <body className="flex min-h-full flex-col">
         <Providers>{children}</Providers>
+        <Toaster />
       </body>
     </html>
   );

@@ -16,6 +16,7 @@ import { TransactionHistory } from "@/components/dashboard/TransactionHistory";
 import { BottomNav, type NavTab } from "@/components/dashboard/BottomNav";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { LiquidityScreen } from "@/components/dashboard/LiquidityScreen";
+import { FaucetButton } from "@/components/dashboard/FaucetButton";
 
 export default function DashboardPage() {
   const { authenticated, ready } = usePrivy();
@@ -53,6 +54,7 @@ export default function DashboardPage() {
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8">
               {activeTab === "send" && (
                 <div className="animate-fade-up space-y-6">
+
                   <StatsCards
                     selectedToken={wp.selectedToken}
                     onTokenChange={(token) => {
