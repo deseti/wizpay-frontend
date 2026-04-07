@@ -1,29 +1,38 @@
 "use client";
 
 import { useState } from "react";
-import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
+import { PrivyProvider } from "@privy-io/react-auth";
+import { WagmiProvider } from "@privy-io/wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider } from "wagmi";
-import { config } from "@/lib/wagmi";
+import { config, arcTestnet } from "@/lib/wagmi";
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  // Create QueryClient inside component with useState to prevent
-  // re-creation on re-renders and avoid double WalletConnect init
   const [queryClient] = useState(() => new QueryClient());
 
   return (
-    <WagmiProvider config={config}>
+    <PrivyProvider
+      appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || ""}
+      config={{
+        loginMethods: ["email", "google", "twitter", "wallet"],
+        appearance: {
+          theme: "dark",
+          accentColor: "#6366f1",
+          logo: undefined,
+        },
+        embeddedWallets: {
+          ethereum: {
+            createOnLogin: "users-without-wallets",
+          },
+        },
+        defaultChain: arcTestnet,
+        supportedChains: [arcTestnet],
+      }}
+    >
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider
-          theme={darkTheme({
-            accentColor: "#6366f1",
-            accentColorForeground: "white",
-            borderRadius: "medium",
-          })}
-        >
+        <WagmiProvider config={config}>
           {children}
-        </RainbowKitProvider>
+        </WagmiProvider>
       </QueryClientProvider>
-    </WagmiProvider>
+    </PrivyProvider>
   );
 }

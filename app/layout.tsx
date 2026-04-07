@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { Geist_Mono, Manrope } from "next/font/google";
 
-import "@rainbow-me/rainbowkit/styles.css";
-
 import "./globals.css";
 import { Providers } from "./providers";
+
+/** Privy requires client-side initialization — skip static prerendering */
+export const dynamic = "force-dynamic";
 
 const manrope = Manrope({
   variable: "--font-sans",

@@ -1,5 +1,6 @@
 "use client";
 
+import { usePrivy } from "@privy-io/react-auth";
 import { useAccount } from "wagmi";
 
 import { BatchComposer } from "@/components/dashboard/BatchComposer";
@@ -13,7 +14,8 @@ import { TransactionHistory } from "@/components/dashboard/TransactionHistory";
 import { useWizPay } from "@/lib/use-wizpay";
 
 export default function DashboardPage() {
-  const { address: walletAddress, isConnected } = useAccount();
+  const { authenticated, ready } = usePrivy();
+  const { address: walletAddress } = useAccount();
   const wp = useWizPay();
 
   return (
@@ -28,7 +30,7 @@ export default function DashboardPage() {
       <DashboardHeader />
 
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8">
-        {!isConnected ? (
+        {!ready || !authenticated ? (
           <ConnectWalletCard />
         ) : (
           <>

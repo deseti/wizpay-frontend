@@ -1,4 +1,5 @@
-import { getDefaultConfig } from "@rainbow-me/rainbowkit";
+import { createConfig } from "@privy-io/wagmi";
+import { http } from "wagmi";
 import { defineChain } from "viem";
 
 /**
@@ -27,11 +28,13 @@ export const arcTestnet = defineChain({
 });
 
 /**
- * Wagmi / RainbowKit configuration
+ * Wagmi configuration — synced with Privy auth state
+ * Using createConfig from @privy-io/wagmi ensures wallet connections
+ * are automatically driven by Privy's authentication.
  */
-export const config = getDefaultConfig({
-  appName: "WizPay",
-  projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID || "",
+export const config = createConfig({
   chains: [arcTestnet],
-  ssr: true, // required for Next.js App Router
+  transports: {
+    [arcTestnet.id]: http(),
+  },
 });

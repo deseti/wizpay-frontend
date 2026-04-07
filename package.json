@@ -9,7 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@rainbow-me/rainbowkit": "^2.2.10",
+    "@privy-io/react-auth": "^3.19.0",
+    "@privy-io/wagmi": "^4.0.3",
     "@tanstack/react-query": "^5.96.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
