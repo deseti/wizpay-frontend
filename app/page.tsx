@@ -139,6 +139,9 @@ export default function DashboardPage() {
                     tokenSymbol={wp.selectedToken}
                     decimals={wp.activeToken.decimals}
                     recipientCount={wp.sessionTotalRecipients}
+                    isMultiBatch={wp.totalBatches > 1}
+                    referenceId={wp.referenceId}
+                    sessionTotalDistributed={wp.sessionTotalDistributed}
                   />
                 </div>
               )}

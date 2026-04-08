@@ -27,6 +27,7 @@ export function useWizPayState() {
 
   const [sessionTotalAmount, setSessionTotalAmount] = useState<bigint>(0n);
   const [sessionTotalRecipients, setSessionTotalRecipients] = useState<number>(0);
+  const [sessionTotalDistributed, setSessionTotalDistributed] = useState<Record<TokenSymbol, bigint>>({ USDC: 0n, EURC: 0n });
 
   useEffect(() => {
     setReferenceId(generateReferenceId());
@@ -93,6 +94,7 @@ export function useWizPayState() {
     setErrors({});
     setSessionTotalAmount(0n);
     setSessionTotalRecipients(0);
+    setSessionTotalDistributed({ USDC: 0n, EURC: 0n });
   }, []);
 
   const loadNextBatch = useCallback(() => {
@@ -186,6 +188,7 @@ export function useWizPayState() {
     setErrorMessage(null);
     setSessionTotalAmount(0n);
     setSessionTotalRecipients(0);
+    setSessionTotalDistributed({ USDC: 0n, EURC: 0n });
   }, []);
 
   const dismissSuccessModal = useCallback(() => {
@@ -243,5 +246,7 @@ export function useWizPayState() {
     setSessionTotalAmount,
     sessionTotalRecipients,
     setSessionTotalRecipients,
+    sessionTotalDistributed,
+    setSessionTotalDistributed,
   };
 }

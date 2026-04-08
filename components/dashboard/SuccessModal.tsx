@@ -20,6 +20,9 @@ interface SuccessModalProps {
   tokenSymbol: TokenSymbol;
   decimals: number;
   recipientCount: number;
+  isMultiBatch: boolean;
+  referenceId: string;
+  sessionTotalDistributed: Record<TokenSymbol, bigint>;
 }
 
 export function SuccessModal({
@@ -30,6 +33,9 @@ export function SuccessModal({
   tokenSymbol,
   decimals,
   recipientCount,
+  isMultiBatch,
+  referenceId,
+  sessionTotalDistributed,
 }: SuccessModalProps) {
   if (!isOpen) return null;
 
@@ -94,7 +100,37 @@ export function SuccessModal({
                 </p>
               </div>
             </div>
-            {txHash && (
+            
+            <div className="space-y-1 mt-4 pt-4 border-t border-border/40 text-left">
+              <p className="text-xs uppercase text-muted-foreground/60 font-semibold mb-3">
+                Successfully Distributed
+              </p>
+              <div className="flex flex-col gap-2">
+                {Object.entries(sessionTotalDistributed).map(([token, amount]) => {
+                  if (amount === 0n) return null;
+                  return (
+                    <div key={token} className="flex justify-between items-center bg-background/50 rounded-xl px-3 py-2 border border-border/30">
+                      <span className="font-mono text-lg font-bold">
+                        {formatTokenAmount(amount, decimals, 2)}
+                      </span>
+                      <span className="text-sm font-medium text-muted-foreground">{token}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {isMultiBatch ? (
+              <div className="mt-5 flex flex-col gap-2 rounded-xl border border-border/30 bg-background/50 px-3 py-3 text-sm text-left">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground/70 uppercase font-semibold">Reference ID</span>
+                  <span className="font-mono font-bold text-emerald-400">{referenceId.replace(/-\d+$/, "")}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  View full batch details and transaction hashes in the History tab.
+                </p>
+              </div>
+            ) : txHash && (
               <div className="mt-5 flex items-center justify-between rounded-xl border border-border/30 bg-background/50 px-3 py-2.5 text-sm">
                 <span className="font-mono text-muted-foreground/70 text-xs">
                   {formatCompactAddress(txHash)}

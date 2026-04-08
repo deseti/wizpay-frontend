@@ -279,6 +279,14 @@ export function useWizPayContract({
 
       state.setSessionTotalAmount((prev) => prev + batchAmount);
       state.setSessionTotalRecipients((prev) => prev + validRecipientCount);
+      state.setSessionTotalDistributed((prev) => {
+        const next = { ...prev };
+        state.preparedRecipients.forEach((r, i) => {
+          const out = quoteSummary.estimatedAmountsOut[i] ?? 0n;
+          next[r.targetToken] = (next[r.targetToken] || 0n) + out;
+        });
+        return next;
+      });
 
       if (state.currentBatchNumber < state.totalBatches) {
         toast({

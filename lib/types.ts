@@ -124,6 +124,8 @@ export interface WizPayState {
   setSessionTotalAmount: (amount: bigint | ((prev: bigint) => bigint)) => void;
   sessionTotalRecipients: number;
   setSessionTotalRecipients: (count: number | ((prev: number) => number)) => void;
+  sessionTotalDistributed: Record<TokenSymbol, bigint>;
+  setSessionTotalDistributed: (arg: Record<TokenSymbol, bigint> | ((prev: Record<TokenSymbol, bigint>) => Record<TokenSymbol, bigint>)) => void;
 
   /* actions */
   handleApprove: () => Promise<void>;
