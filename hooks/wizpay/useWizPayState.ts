@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import { type Hex } from "viem";
 import {
   createRecipient,
@@ -18,8 +18,12 @@ export function useWizPayState() {
   const [recipients, setRecipients] = useState<RecipientDraft[]>(() => [
     createRecipient("USDC"),
   ]);
-  const [referenceId, setReferenceId] = useState<string>(generateReferenceId());
+  const [referenceId, setReferenceId] = useState<string>("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setReferenceId(generateReferenceId());
+  }, []);
   
   const [approvalState, setApprovalState] = useState<StepState>("idle");
   const [submitState, setSubmitState] = useState<StepState>("idle");
@@ -50,7 +54,10 @@ export function useWizPayState() {
   );
 
   const addRecipient = useCallback(() => {
-    setRecipients((current) => [...current, createRecipient(selectedToken)]);
+    setRecipients((current) => {
+      if (current.length >= 50) return current;
+      return [...current, createRecipient(selectedToken)];
+    });
   }, [selectedToken]);
 
   const removeRecipient = useCallback((id: string) => {
@@ -61,7 +68,12 @@ export function useWizPayState() {
   }, []);
 
   const importRecipients = useCallback((rows: RecipientDraft[]) => {
-    setRecipients(rows);
+    if (rows.length > 50) {
+      setRecipients(rows.slice(0, 50));
+      setErrorMessage("A batch can contain at most 50 recipients. Excess rows were removed.");
+    } else {
+      setRecipients(rows);
+    }
     setErrors({});
   }, []);
 
@@ -91,10 +103,8 @@ export function useWizPayState() {
   const validate = useCallback(() => {
     const nextErrors: Record<string, string> = {};
 
-    // Auto-populate reference ID if empty instead of blocking submission
     if (!referenceId.trim()) {
-      setReferenceId(generateReferenceId());
-      // Don't add an error — we just fixed it
+      nextErrors.referenceId = "Reference ID is required";
     }
 
     preparedRecipients.forEach((r) => {

@@ -196,6 +196,11 @@ export function BatchComposer({
           amount: amount.trim(),
           targetToken: token,
         });
+
+        if (rows.length === 50) {
+          warnings.push(`Max batch size of 50 reached. Remaining rows excluded.`);
+          break;
+        }
       }
 
       setCsvLoading(false);

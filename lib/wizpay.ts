@@ -115,7 +115,7 @@ export function getFriendlyErrorMessage(error: unknown): string {
     return "Swap failed because the quoted output moved below the allowed minimum.";
   }
 
-  if (message.includes("referenceid")) {
+  if (message.includes("referenceid required") || message.includes("referenceid too long")) {
     return "Reference ID is required before the batch can be submitted.";
   }
 

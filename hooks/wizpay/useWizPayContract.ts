@@ -213,7 +213,12 @@ export function useWizPayContract({
 
     const minAmountsOutArray = state.preparedRecipients.map((r, i) => {
       const isCrossCurrency = !sameAddress(activeToken.address, tokenOutsArray[i]);
-      if (!isCrossCurrency) return r.amountUnits; // exact match
+      if (!isCrossCurrency) {
+        // exact match - account for system fee so it doesn't revert
+        const feeBps = feeBpsData ?? 0n;
+        const feeAmount = (r.amountUnits * feeBps) / 10000n;
+        return r.amountUnits - feeAmount;
+      }
       const projected = quoteSummary.estimatedAmountsOut[i] ?? 0n;
       // Subtract buffer
       return (projected * (10000n - PREVIEW_SLIPPAGE_BPS)) / 10000n;
