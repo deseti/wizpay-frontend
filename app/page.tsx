@@ -29,16 +29,17 @@ export default function DashboardPage() {
     <div className="relative flex min-h-screen overflow-hidden bg-background">
       {/* Background decorations */}
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="grid-fade absolute inset-0 opacity-35" />
-        <div className="absolute left-[-10%] top-[-15%] h-[26rem] w-[26rem] rounded-full bg-primary/20 blur-[120px]" />
-        <div className="absolute bottom-[-18%] right-[-10%] h-[28rem] w-[28rem] rounded-full bg-cyan-500/10 blur-[140px]" />
+        <div className="grid-fade absolute inset-0 opacity-25" />
+        <div className="absolute left-[-8%] top-[-12%] h-[28rem] w-[28rem] rounded-full bg-primary/12 blur-[140px] animate-float" />
+        <div className="absolute bottom-[-15%] right-[-8%] h-[24rem] w-[24rem] rounded-full bg-violet-500/8 blur-[120px]" style={{ animationDelay: '2s' }} />
+        <div className="absolute top-[40%] left-[50%] h-[16rem] w-[16rem] -translate-x-1/2 rounded-full bg-cyan-500/5 blur-[100px]" style={{ animationDelay: '4s' }} />
       </div>
 
       {(!ready || !authenticated) ? (
         // Unauthenticated view (no navigation layout)
         <div className="flex w-full flex-col h-screen overflow-y-auto">
           <DashboardHeader />
-          <main className="mx-auto flex w-full max-w-7xl flex-1 items-center justify-center px-4 py-12 sm:px-6">
+          <main className="mx-auto flex w-full max-w-7xl flex-1 items-center justify-center px-4 py-8 sm:px-6">
             <ConnectWalletCard />
           </main>
         </div>
@@ -48,12 +49,12 @@ export default function DashboardPage() {
           {/* Desktop Sidebar */}
           <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
           
-          <div className="flex w-full flex-col flex-1 h-screen overflow-y-auto pb-24 md:pb-6">
+          <div className="flex w-full flex-col flex-1 h-screen overflow-y-auto pb-28 md:pb-6">
             <DashboardHeader />
             
-            <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8">
+            <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-5 sm:px-6 lg:py-8">
               {activeTab === "send" && (
-                <div className="animate-fade-up space-y-6">
+                <div className="animate-fade-up space-y-6 stagger-children">
 
                   <StatsCards
                     selectedToken={wp.selectedToken}

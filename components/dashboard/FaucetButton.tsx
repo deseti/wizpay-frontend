@@ -19,7 +19,7 @@ export function FaucetButton() {
     <div className="flex flex-col gap-3">
       {address && (
         <div className="space-y-1.5">
-          <p className="px-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+          <p className="px-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-[0.2em]">
             1. Copy your address
           </p>
           <button
@@ -36,13 +36,13 @@ export function FaucetButton() {
                 console.error(e);
               }
             }}
-            className="flex w-full items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm font-mono text-foreground/80 transition-colors hover:bg-muted/80 hover:text-foreground active:scale-[0.98]"
+            className="flex w-full items-center justify-between rounded-xl border border-border/40 bg-background/30 px-3 py-2.5 text-sm font-mono text-foreground/75 transition-all hover:bg-primary/8 hover:text-primary hover:border-primary/20 active:scale-[0.98]"
           >
             {truncateAddress(address)}
             {copied ? (
               <Check className="h-4 w-4 text-emerald-400" />
             ) : (
-              <Copy className="h-4 w-4 text-muted-foreground" />
+              <Copy className="h-4 w-4 text-muted-foreground/50" />
             )}
           </button>
         </div>
@@ -50,13 +50,13 @@ export function FaucetButton() {
 
       <div className="space-y-1.5">
         {address && (
-          <p className="px-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+          <p className="px-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-[0.2em]">
             2. Request Tokens
           </p>
         )}
         <Button
           variant="outline"
-          className="w-full justify-start gap-3 border-border/60 bg-background/50 text-muted-foreground shadow-sm hover:border-primary/40 hover:bg-primary/10 hover:text-primary transition-all group"
+          className="w-full justify-start gap-3 border-border/40 bg-background/30 text-muted-foreground shadow-sm hover:border-primary/30 hover:bg-primary/8 hover:text-primary transition-all group"
           asChild
         >
           <a
@@ -64,7 +64,7 @@ export function FaucetButton() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            <div className="flex items-center justify-center rounded-lg bg-primary/15 p-1 text-primary group-hover:scale-110 transition-transform">
+            <div className="flex items-center justify-center rounded-lg bg-primary/15 p-1.5 text-primary group-hover:scale-110 group-hover:shadow-lg group-hover:shadow-primary/20 transition-all">
               <Droplet className="h-4 w-4" />
             </div>
             Get Testnet Tokens ↗

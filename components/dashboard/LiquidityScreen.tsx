@@ -9,6 +9,8 @@ import {
   Loader2,
   Info,
   MessageCircle,
+  Sparkles,
+  Vault,
 } from "lucide-react";
 import { usePublicClient } from "wagmi";
 
@@ -147,50 +149,53 @@ export function LiquidityScreen() {
 
   if (step === "success") {
     return (
-      <div className="mx-auto max-w-md mt-10">
-        <Card className="glass-card border-emerald-500/30 shadow-2xl shadow-emerald-500/10">
-          <CardContent className="flex flex-col items-center gap-5 pb-8 pt-10 text-center">
+      <div className="mx-auto max-w-md mt-8">
+        <Card className="glass-card border-emerald-500/25 shadow-2xl shadow-emerald-500/8 animate-scale-in">
+          {/* Decorative glow */}
+          <div className="pointer-events-none absolute -top-12 left-1/2 -translate-x-1/2 h-24 w-40 rounded-full bg-emerald-500/10 blur-[50px]" />
+
+          <CardContent className="flex flex-col items-center gap-5 pb-8 pt-10 text-center relative">
             <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/15">
               <div className="absolute inset-0 animate-ping rounded-full bg-emerald-500/10" />
-              <CheckCircle2 className="h-10 w-10 text-emerald-400" />
+              <CheckCircle2 className="h-10 w-10 text-emerald-400 relative z-10" />
             </div>
 
             <div className="space-y-1">
-              <h2 className="text-2xl font-semibold tracking-tight">
+              <h2 className="text-2xl font-bold tracking-tight neon-text">
                 {activeTab === "deposit" ? "Deposit Successful!" : "Withdrawal Successful!"}
               </h2>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground/80">
                 {activeTab === "deposit"
-                  ? "Your liquidity is live. SFX-LP shares have been minted to your wallet."
-                  : `${selectedToken} tokens have been returned to your wallet.`}
+                  ? "Your liquidity is live. SFX-LP shares have been minted."
+                  : `${selectedToken} tokens returned to your wallet.`}
               </p>
             </div>
 
-            <div className="w-full rounded-xl border border-border/60 bg-background/50 p-4">
-              <div className="grid grid-cols-2 gap-4 divide-x divide-border/60">
+            <div className="w-full rounded-2xl border border-border/40 bg-background/35 p-4">
+              <div className="grid grid-cols-2 gap-4 divide-x divide-border/40">
                 <div className="space-y-1">
-                  <p className="text-xs uppercase text-muted-foreground">Amount</p>
-                  <p className="font-mono text-lg font-medium">
-                    {amountStr} <span className="text-sm">{activeTab === "deposit" ? selectedToken : "SFX-LP"}</span>
+                  <p className="text-xs uppercase text-muted-foreground/60 font-semibold">Amount</p>
+                  <p className="font-mono text-lg font-bold">
+                    {amountStr} <span className="text-sm font-medium text-muted-foreground">{activeTab === "deposit" ? selectedToken : "SFX-LP"}</span>
                   </p>
                 </div>
                 <div className="space-y-1 pl-4">
-                  <p className="text-xs uppercase text-muted-foreground">Action</p>
-                  <p className="font-mono text-lg font-medium capitalize">
+                  <p className="text-xs uppercase text-muted-foreground/60 font-semibold">Action</p>
+                  <p className="font-mono text-lg font-bold capitalize">
                     {activeTab}
                   </p>
                 </div>
               </div>
               {txHash && (
-                <div className="mt-4 flex items-center justify-between rounded-lg border border-border/40 bg-background/70 px-3 py-2 text-sm">
-                  <span className="font-mono text-muted-foreground">
+                <div className="mt-4 flex items-center justify-between rounded-xl border border-border/30 bg-background/50 px-3 py-2.5 text-sm">
+                  <span className="font-mono text-muted-foreground/70 text-xs">
                     {formatCompactAddress(txHash)}
                   </span>
                   <a
                     href={`${EXPLORER_BASE_URL}/tx/${txHash}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1.5 font-medium text-emerald-400 hover:text-emerald-300"
+                    className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
                   >
                     Explorer <ExternalLink className="h-3.5 w-3.5" />
                   </a>
@@ -199,7 +204,7 @@ export function LiquidityScreen() {
             </div>
 
             <div className="flex w-full flex-col gap-3">
-              <Button className="w-full gap-2 bg-[#1DA1F2] text-white hover:bg-[#1A8CD8]" asChild>
+              <Button className="w-full gap-2 bg-[#1DA1F2] text-white hover:bg-[#1A8CD8] shadow-lg shadow-[#1DA1F2]/20" asChild>
                 <a href={xShareUrl} target="_blank" rel="noreferrer">
                   <MessageCircle className="h-4 w-4" />
                   Share to X (Twitter)
@@ -207,7 +212,7 @@ export function LiquidityScreen() {
               </Button>
               <Button
                 variant="outline"
-                className="w-full bg-background/50"
+                className="w-full bg-background/40 border-border/40 hover:border-primary/20"
                 onClick={resetState}
               >
                 Manage More Liquidity
@@ -221,24 +226,24 @@ export function LiquidityScreen() {
 
   if (step === "error") {
     return (
-      <div className="mx-auto max-w-md mt-10">
-        <Card className="glass-card border-red-500/40 shadow-2xl shadow-red-500/10">
+      <div className="mx-auto max-w-md mt-8">
+        <Card className="glass-card border-red-500/30 shadow-2xl shadow-red-500/8 animate-scale-in">
           <CardContent className="flex flex-col items-center gap-5 pb-8 pt-10 text-center">
             <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-red-500/15">
               <XCircle className="h-10 w-10 text-red-400" />
             </div>
 
             <div className="space-y-1">
-              <h2 className="text-xl font-semibold tracking-tight">
+              <h2 className="text-xl font-bold tracking-tight">
                 Transaction Failed
               </h2>
-              <p className="text-sm text-muted-foreground max-w-xs break-words">
+              <p className="text-sm text-muted-foreground/80 max-w-xs break-words">
                 {errorMsg}
               </p>
             </div>
 
             <div className="flex w-full flex-col gap-3">
-              <Button className="w-full" onClick={resetState}>
+              <Button className="w-full glow-btn" onClick={resetState}>
                 Try Again
               </Button>
             </div>
@@ -262,10 +267,15 @@ export function LiquidityScreen() {
   };
 
   return (
-    <div className="mx-auto max-w-lg mt-8 mb-24">
-      <Card className="glass-card border-border/60 shadow-xl">
+    <div className="mx-auto max-w-lg mt-6 mb-24">
+      <Card className="glass-card border-border/40 shadow-xl animate-fade-up">
         <CardHeader>
-          <CardTitle className="text-2xl">DeFi Liquidity Vault</CardTitle>
+          <CardTitle className="text-2xl flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/15 text-primary">
+              <Sparkles className="h-4 w-4 icon-glow" />
+            </div>
+            DeFi Liquidity Vault
+          </CardTitle>
           <CardDescription>
             Provide liquidity to the WizPay routing engine and earn cross-swap
             fees (SFX-LP shares).
@@ -298,7 +308,7 @@ export function LiquidityScreen() {
                     setAmountStr("");
                   }}
                 >
-                  <SelectTrigger className="h-12 bg-background/50">
+                  <SelectTrigger className="h-12 bg-background/40 border-border/40">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -313,7 +323,7 @@ export function LiquidityScreen() {
                   <Label>
                     {activeTab === "deposit" ? "Amount" : "SFX-LP Shares"}
                   </Label>
-                  <span className="text-xs text-muted-foreground font-mono">
+                  <span className="text-xs text-muted-foreground/60 font-mono">
                     {activeTab === "deposit"
                       ? `Bal: ${formatTokenAmount(tokenBalance, decimals, 4)} ${selectedToken}`
                       : `SFX-LP: ${formatTokenAmount(lpBalance, 6, 4)}`}
@@ -326,7 +336,7 @@ export function LiquidityScreen() {
                     value={amountStr}
                     onChange={(e) => setAmountStr(e.target.value)}
                     disabled={step !== "idle"}
-                    className="h-12 text-lg font-mono bg-background/50"
+                    className="h-12 text-lg font-mono bg-background/40 border-border/40"
                   />
                   <Button
                     variant="secondary"
@@ -345,7 +355,7 @@ export function LiquidityScreen() {
                 </div>
               </div>
 
-              <div className="rounded-xl bg-primary/10 border border-primary/20 p-4 flex text-sm text-primary/90 mt-2">
+              <div className="rounded-xl bg-primary/8 border border-primary/15 p-4 flex text-sm text-primary/80 mt-2">
                 <Info className="h-5 w-5 mr-3 mt-0.5 flex-shrink-0" />
                 <span className="leading-relaxed">
                   {activeTab === "deposit"
@@ -355,7 +365,7 @@ export function LiquidityScreen() {
               </div>
 
               <Button
-                className="w-full h-12 text-lg shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 transition-all active:scale-[0.98]"
+                className="glow-btn w-full h-12 text-lg bg-gradient-to-r from-primary to-violet-500 text-primary-foreground shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 hover:brightness-110 transition-all active:scale-[0.97]"
                 size="lg"
                 disabled={isActionDisabled}
                 onClick={handleAction}

@@ -25,7 +25,6 @@ import {
   TOKEN_OPTIONS,
   type TokenSymbol,
 } from "@/lib/wizpay";
-import { Button } from "@/components/ui/button";
 
 interface StatsCardsProps {
   selectedToken: TokenSymbol;
@@ -40,6 +39,13 @@ interface StatsCardsProps {
   fxEngineData: Address | undefined;
   onClearMessages: () => void;
 }
+
+const cardAccents = [
+  "from-violet-500/10 to-transparent",
+  "from-emerald-500/10 to-transparent",
+  "from-blue-500/10 to-transparent",
+  "from-amber-500/10 to-transparent",
+];
 
 export function StatsCards({
   selectedToken,
@@ -57,17 +63,20 @@ export function StatsCards({
   return (
     <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {/* Input Token */}
-      <Card className="glass-card border-border/60">
-        <CardHeader>
+      <Card className="glass-card border-border/40 relative overflow-hidden group">
+        <div className={`absolute inset-0 bg-gradient-to-br ${cardAccents[0]} opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
+        <CardHeader className="relative">
           <CardTitle className="flex items-center gap-2">
-            <Coins className="h-4 w-4 text-primary" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-500/15 text-violet-400">
+              <Coins className="h-3.5 w-3.5" />
+            </div>
             Input Token
           </CardTitle>
           <CardDescription>
-            The batch is funded from one input token, then routed per row.
+            Batch funded from one input token, routed per row.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3 relative">
           <Select
             value={selectedToken}
             onValueChange={(value) => {
@@ -76,7 +85,7 @@ export function StatsCards({
             }}
             disabled={isBusy}
           >
-            <SelectTrigger className="h-11 bg-background/70">
+            <SelectTrigger className="h-11 bg-background/50 border-border/40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -87,31 +96,33 @@ export function StatsCards({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">
-            Approval is exact to the gross batch spend. Fees are deducted from
-            that same approved amount.
+          <p className="text-[11px] text-muted-foreground/70">
+            Approval is exact to the gross batch spend.
           </p>
         </CardContent>
       </Card>
 
       {/* Token Balance */}
-      <Card className="glass-card border-border/60">
-        <CardHeader>
+      <Card className="glass-card border-border/40 relative overflow-hidden group">
+        <div className={`absolute inset-0 bg-gradient-to-br ${cardAccents[1]} opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
+        <CardHeader className="relative">
           <CardTitle className="flex items-center gap-2">
-            <Wallet className="h-4 w-4 text-primary" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400">
+              <Wallet className="h-3.5 w-3.5" />
+            </div>
             Token Balance
           </CardTitle>
           <CardDescription>
-            Always refreshed after successful batch settlement.
+            Refreshed after batch settlement.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-3xl font-semibold tracking-tight">
+        <CardContent className="space-y-2 relative">
+          <p className="text-3xl font-bold tracking-tight">
             {formatTokenAmount(currentBalance, activeToken.decimals, 2)}
           </p>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Badge variant="outline">{activeToken.symbol}</Badge>
-            <span>
+            <Badge variant="outline" className="text-emerald-300/80 border-emerald-500/20 bg-emerald-500/5">{activeToken.symbol}</Badge>
+            <span className="text-xs font-mono">
               {walletAddress ? formatCompactAddress(walletAddress) : "-"}
             </span>
           </div>
@@ -119,56 +130,58 @@ export function StatsCards({
       </Card>
 
       {/* Total Routed */}
-      <Card className="glass-card border-border/60">
-        <CardHeader>
+      <Card className="glass-card border-border/40 relative overflow-hidden group">
+        <div className={`absolute inset-0 bg-gradient-to-br ${cardAccents[2]} opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
+        <CardHeader className="relative">
           <CardTitle className="flex items-center gap-2">
-            <History className="h-4 w-4 text-primary" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/15 text-blue-400">
+              <History className="h-3.5 w-3.5" />
+            </div>
             Total Routed
           </CardTitle>
           <CardDescription>
-            Summed from confirmed `BatchPaymentRouted` events for your wallet.
+            From confirmed BatchPaymentRouted events.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-3xl font-semibold tracking-tight">
+        <CardContent className="space-y-2 relative">
+          <p className="text-3xl font-bold tracking-tight">
             {formatTokenAmount(totalRouted, activeToken.decimals, 2)}
           </p>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Badge variant="outline">{activeToken.symbol}</Badge>
-            <span>{historyCount} confirmed batches</span>
+            <Badge variant="outline" className="text-blue-300/80 border-blue-500/20 bg-blue-500/5">{activeToken.symbol}</Badge>
+            <span className="text-xs">{historyCount} confirmed batches</span>
           </div>
         </CardContent>
       </Card>
 
       {/* FX Engine */}
-      <Card className="glass-card border-border/60">
-        <CardHeader className="pb-3">
-          <div className="flex flex-row justify-between items-start">
-            <div className="space-y-1">
-              <CardTitle className="flex items-center gap-2">
-                <ArrowRightLeft className="h-4 w-4 text-primary" />
-                FX Engine
-              </CardTitle>
-              <CardDescription>
-                Live pool liquidity for WizPay routing.
-              </CardDescription>
+      <Card className="glass-card border-border/40 relative overflow-hidden group">
+        <div className={`absolute inset-0 bg-gradient-to-br ${cardAccents[3]} opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
+        <CardHeader className="pb-3 relative">
+          <CardTitle className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400">
+              <ArrowRightLeft className="h-3.5 w-3.5" />
             </div>
-          </div>
+            FX Engine
+          </CardTitle>
+          <CardDescription>
+            Live pool liquidity for routing.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between rounded-xl border border-border/60 bg-background/50 px-3 py-2">
+        <CardContent className="space-y-2.5 relative">
+          <div className="flex items-center justify-between rounded-xl border border-border/40 bg-background/40 px-3 py-2.5 transition-colors hover:border-primary/20">
             <span className="text-sm text-muted-foreground">USDC</span>
-            <span className="font-mono text-sm">
+            <span className="font-mono text-sm font-medium">
               {formatTokenAmount(engineBalances.USDC, 6, 2)}
             </span>
           </div>
-          <div className="flex items-center justify-between rounded-xl border border-border/60 bg-background/50 px-3 py-2">
+          <div className="flex items-center justify-between rounded-xl border border-border/40 bg-background/40 px-3 py-2.5 transition-colors hover:border-primary/20">
             <span className="text-sm text-muted-foreground">EURC</span>
-            <span className="font-mono text-sm">
+            <span className="font-mono text-sm font-medium">
               {formatTokenAmount(engineBalances.EURC, 6, 2)}
             </span>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-[11px] text-muted-foreground/60 font-mono">
             Engine:{" "}
             {fxEngineData
               ? formatCompactAddress(fxEngineData)

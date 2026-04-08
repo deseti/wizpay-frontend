@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import {
   AlertCircle,
+  CheckCircle2,
   Loader2,
   Plus,
   Rocket,
@@ -48,6 +49,7 @@ import {
   type RecipientDraft,
   type TokenSymbol,
 } from "@/lib/wizpay";
+import { useToast } from "@/hooks/use-toast";
 
 interface BatchComposerProps {
   selectedToken: TokenSymbol;
@@ -113,17 +115,46 @@ export function BatchComposer({
   importRecipients,
 }: BatchComposerProps) {
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const [csvLoading, setCsvLoading] = useState(false);
+  const { toast } = useToast();
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setCsvLoading(true);
+
     const reader = new FileReader();
+
+    reader.onerror = () => {
+      setCsvLoading(false);
+      toast({
+        title: "CSV Upload Failed",
+        description: "Could not read the file. Please check it is a valid .csv file.",
+        variant: "destructive",
+      });
+      // Reset input so the same file can be re-uploaded
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    };
+
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      if (!text) return;
 
-      const lines = text
+      if (!text || !text.trim()) {
+        setCsvLoading(false);
+        toast({
+          title: "CSV Upload Failed",
+          description: "The file appears to be empty.",
+          variant: "destructive",
+        });
+        if (csvInputRef.current) csvInputRef.current.value = "";
+        return;
+      }
+
+      // Strip BOM if present
+      const cleanText = text.replace(/^\uFEFF/, "");
+
+      const lines = cleanText
         .split(/\r?\n/)
         .map((l) => l.trim())
         .filter(Boolean);
@@ -131,13 +162,17 @@ export function BatchComposer({
       // Detect and skip header row
       const firstLine = lines[0]?.toLowerCase() ?? "";
       const startIdx =
-        firstLine.includes("address") || firstLine.includes("wallet") ? 1 : 0;
+        firstLine.includes("address") || firstLine.includes("wallet") || firstLine.includes("recipient") ? 1 : 0;
+
+      // Auto-detect delimiter (comma vs semicolon)
+      const sampleLine = lines[startIdx] ?? lines[0] ?? "";
+      const delimiter = sampleLine.includes(";") ? ";" : ",";
 
       const rows: RecipientDraft[] = [];
       const warnings: string[] = [];
 
       for (let i = startIdx; i < lines.length; i++) {
-        const cols = lines[i].split(",").map((c) => c.trim());
+        const cols = lines[i].split(delimiter).map((c) => c.trim());
         const [address, amount, targetToken] = cols;
 
         if (!address?.startsWith("0x")) {
@@ -160,11 +195,19 @@ export function BatchComposer({
         });
       }
 
+      setCsvLoading(false);
+
       if (rows.length === 0) {
         setErrorMessage(
           "CSV import failed: no valid rows found." +
             (warnings.length ? " " + warnings.join("; ") : "")
         );
+        toast({
+          title: "CSV Import Failed",
+          description: `No valid rows found. ${warnings.length} rows had errors.`,
+          variant: "destructive",
+        });
+        if (csvInputRef.current) csvInputRef.current.value = "";
         return;
       }
 
@@ -172,31 +215,41 @@ export function BatchComposer({
 
       if (warnings.length > 0) {
         setErrorMessage(`CSV imported ${rows.length} rows. Skipped: ${warnings.join("; ")}`);
+        toast({
+          title: "CSV Imported with Warnings",
+          description: `${rows.length} rows imported, ${warnings.length} rows skipped.`,
+        });
+      } else {
+        toast({
+          title: "CSV Uploaded Successfully",
+          description: `${rows.length} recipients imported from CSV.`,
+        });
       }
-    };
-    reader.readAsText(file);
 
-    // Reset input so the same file can be re-uploaded
-    if (csvInputRef.current) csvInputRef.current.value = "";
+      // Reset input AFTER processing so the same file can be re-uploaded
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    };
+
+    reader.readAsText(file);
   };
 
   return (
-    <Card className="glass-card border-border/60">
-      <CardHeader className="soft-divider border-b border-border/50">
+    <Card className="glass-card border-border/40">
+      <CardHeader className="soft-divider border-b border-border/30">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <CardTitle>Cross-Token Batch Payroll</CardTitle>
+            <CardTitle className="text-lg">Cross-Token Batch Payroll</CardTitle>
             <CardDescription>
               Send one input token, let each recipient choose USDC or EURC, and
-              block submission automatically if simulation predicts a revert.
+              block submission if simulation predicts a revert.
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="font-mono">
+            <Badge variant="outline" className="font-mono text-[11px] border-primary/20 text-primary/70 bg-primary/5">
               {formatCompactAddress(WIZPAY_ADDRESS)}
             </Badge>
-            <Badge variant="outline">
-              {validRecipientCount}/{recipients.length} rows valid
+            <Badge variant="outline" className="border-emerald-500/20 text-emerald-300/80 bg-emerald-500/5">
+              {validRecipientCount}/{recipients.length} valid
             </Badge>
           </div>
         </div>
@@ -222,7 +275,7 @@ export function BatchComposer({
                 setErrorMessage(null);
               }}
               disabled={isBusy}
-              className="h-11 bg-background/70"
+              className="h-11 bg-background/50 border-border/40"
               aria-invalid={Boolean(errors.referenceId)}
             />
             {errors.referenceId ? (
@@ -231,26 +284,26 @@ export function BatchComposer({
                 {errors.referenceId}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground">
-                This memo is stored on-chain in the batch event history.
+              <p className="text-[11px] text-muted-foreground/70">
+                This memo is stored on-chain in the batch event.
               </p>
             )}
           </div>
 
-          <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+          <div className="rounded-2xl border border-border/40 bg-background/35 p-4">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground/60 font-semibold">
               Draft Summary
             </p>
             <div className="mt-3 space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Gross input</span>
-                <span className="font-mono">
+                <span className="font-mono font-medium">
                   {formatTokenAmount(batchAmount, activeToken.decimals)}{" "}
                   {activeToken.symbol}
                 </span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Estimated fees</span>
+                <span className="text-muted-foreground">Est. fees</span>
                 <span className="font-mono">
                   {formatTokenAmount(
                     quoteSummary.totalFees,
@@ -275,10 +328,10 @@ export function BatchComposer({
         </div>
 
         {/* Desktop table */}
-        <div className="hidden rounded-2xl border border-border/60 md:block">
+        <div className="hidden rounded-2xl border border-border/40 overflow-hidden md:block">
           <Table>
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow className="hover:bg-transparent border-border/30">
                 <TableHead className="w-12">#</TableHead>
                 <TableHead>Wallet Address</TableHead>
                 <TableHead className="w-40">Target Token</TableHead>
@@ -297,8 +350,8 @@ export function BatchComposer({
                   recipient.targetToken === selectedToken;
 
                 return (
-                  <TableRow key={recipient.id} className="align-top">
-                    <TableCell className="pt-3 font-mono text-xs text-muted-foreground">
+                  <TableRow key={recipient.id} className="align-top border-border/20 hover:bg-primary/3 transition-colors">
+                    <TableCell className="pt-3 font-mono text-xs text-muted-foreground/60">
                       {index + 1}
                     </TableCell>
                     <TableCell>
@@ -314,7 +367,7 @@ export function BatchComposer({
                             )
                           }
                           disabled={isBusy}
-                          className="h-10 bg-background/70 font-mono text-xs"
+                          className="h-10 bg-background/50 font-mono text-xs border-border/40"
                           aria-invalid={Boolean(
                             errors[`${recipient.id}-address`]
                           )}
@@ -338,7 +391,7 @@ export function BatchComposer({
                         }
                         disabled={isBusy}
                       >
-                        <SelectTrigger className="h-10 bg-background/70">
+                        <SelectTrigger className="h-10 bg-background/50 border-border/40">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -370,7 +423,7 @@ export function BatchComposer({
                             )
                           }
                           disabled={isBusy}
-                          className="h-10 bg-background/70 tabular-nums"
+                          className="h-10 bg-background/50 tabular-nums border-border/40"
                           aria-invalid={Boolean(
                             errors[`${recipient.id}-amount`]
                           )}
@@ -389,18 +442,18 @@ export function BatchComposer({
                           {recipient.targetToken}
                         </p>
                         {diagnostic ? (
-                          <p className="text-xs text-amber-300">
+                          <p className="text-xs text-amber-300/80">
                             {diagnostic}
                           </p>
                         ) : (
-                          <p className="text-xs text-muted-foreground">
-                            Fee-aware quote refreshed live from chain
+                          <p className="text-[11px] text-muted-foreground/60">
+                            Live quote from chain
                           </p>
                         )}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">
+                      <Badge variant="outline" className={routeIsDirect ? "border-emerald-500/20 text-emerald-300/80 bg-emerald-500/5" : "border-amber-500/20 text-amber-300/80 bg-amber-500/5"}>
                         {routeIsDirect ? "Direct" : "Swap"}
                       </Badge>
                     </TableCell>
@@ -411,6 +464,7 @@ export function BatchComposer({
                         onClick={() => removeRecipient(recipient.id)}
                         disabled={recipients.length === 1 || isBusy}
                         aria-label={`Remove recipient ${index + 1}`}
+                        className="hover:bg-red-500/10 hover:text-red-400 transition-colors"
                       >
                         <Trash2 className="h-4 w-4 text-muted-foreground" />
                       </Button>
@@ -432,7 +486,7 @@ export function BatchComposer({
             return (
               <Card
                 key={recipient.id}
-                className="surface-panel border border-border/60"
+                className="surface-panel border border-border/40"
                 size="sm"
               >
                 <CardHeader className="pb-1">
@@ -453,6 +507,7 @@ export function BatchComposer({
                       onClick={() => removeRecipient(recipient.id)}
                       disabled={recipients.length === 1 || isBusy}
                       aria-label={`Remove recipient ${index + 1}`}
+                      className="hover:bg-red-500/10 hover:text-red-400"
                     >
                       <Trash2 className="h-4 w-4 text-muted-foreground" />
                     </Button>
@@ -474,7 +529,7 @@ export function BatchComposer({
                         )
                       }
                       disabled={isBusy}
-                      className="h-11 bg-background/70 font-mono text-xs"
+                      className="h-11 bg-background/50 font-mono text-xs border-border/40"
                       aria-invalid={Boolean(
                         errors[`${recipient.id}-address`]
                       )}
@@ -502,7 +557,7 @@ export function BatchComposer({
                         }
                         disabled={isBusy}
                       >
-                        <SelectTrigger className="h-11 bg-background/70">
+                        <SelectTrigger className="h-11 bg-background/50 border-border/40">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -536,7 +591,7 @@ export function BatchComposer({
                           )
                         }
                         disabled={isBusy}
-                        className="h-11 bg-background/70 tabular-nums"
+                        className="h-11 bg-background/50 tabular-nums border-border/40"
                         aria-invalid={Boolean(
                           errors[`${recipient.id}-amount`]
                         )}
@@ -549,25 +604,25 @@ export function BatchComposer({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-border/60 bg-background/50 px-3 py-2">
+                  <div className="rounded-xl border border-border/40 bg-background/35 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-4">
-                      <span className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                      <span className="text-xs uppercase tracking-[0.16em] text-muted-foreground/60">
                         They Receive
                       </span>
-                      <span className="font-mono text-sm">
+                      <span className="font-mono text-sm font-medium">
                         {formatTokenAmount(estimatedOut, 6)}{" "}
                         {recipient.targetToken}
                       </span>
                     </div>
                     <p
-                      className={`mt-2 text-xs ${
+                      className={`mt-2 text-[11px] ${
                         diagnostic
-                          ? "text-amber-300"
-                          : "text-muted-foreground"
+                          ? "text-amber-300/80"
+                          : "text-muted-foreground/60"
                       }`}
                     >
                       {diagnostic ??
-                        "Quote is calculated from live contract reads."}
+                        "Quote from live contract reads."}
                     </p>
                   </div>
                 </CardContent>
@@ -576,13 +631,13 @@ export function BatchComposer({
           })}
         </div>
 
-        {/* Add recipient */}
+        {/* Add recipient + CSV upload */}
         <div className="flex flex-wrap items-center gap-3">
           <Button
             variant="outline"
             onClick={addRecipient}
             disabled={recipients.length >= 50 || isBusy}
-            className="h-10 gap-2 bg-background/60"
+            className="h-10 gap-2 bg-background/40 border-border/40 hover:border-primary/30 hover:bg-primary/5 hover:text-primary transition-all"
           >
             <Plus className="h-4 w-4" />
             Add Recipient
@@ -590,35 +645,38 @@ export function BatchComposer({
           <Button
             variant="outline"
             onClick={() => csvInputRef.current?.click()}
-            disabled={isBusy}
-            className="h-10 gap-2 bg-background/60"
+            disabled={isBusy || csvLoading}
+            className="h-10 gap-2 bg-background/40 border-border/40 hover:border-primary/30 hover:bg-primary/5 hover:text-primary transition-all"
           >
-            <Upload className="h-4 w-4" />
-            Upload CSV
+            {csvLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+            {csvLoading ? "Parsing..." : "Upload CSV"}
           </Button>
           <input
             ref={csvInputRef}
             type="file"
-            accept=".csv"
+            accept=".csv,text/csv"
             className="hidden"
             onChange={handleCsvUpload}
           />
-          <p className="text-sm text-muted-foreground">
-            Mixed payout example: send {selectedToken}, settle each row as USDC
-            or EURC in the same on-chain batch.
+          <p className="text-[11px] text-muted-foreground/60">
+            CSV format: address, amount, token (USDC/EURC)
           </p>
         </div>
       </CardContent>
 
-      <CardFooter className="flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <CardFooter className="flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between border-border/30">
         <div className="space-y-1 text-sm">
-          <p className="font-medium">
+          <p className="font-semibold">
             Gross batch:{" "}
             {formatTokenAmount(batchAmount, activeToken.decimals)}{" "}
             {activeToken.symbol}
           </p>
-          <p className="text-muted-foreground">
-            Estimated gas:{" "}
+          <p className="text-muted-foreground/70 text-xs">
+            Est. gas:{" "}
             {estimatedGas
               ? estimatedGas.toLocaleString("en-US")
               : "Run simulation"}
@@ -630,7 +688,7 @@ export function BatchComposer({
             variant="outline"
             onClick={resetComposer}
             disabled={isBusy}
-            className="h-11 bg-background/60"
+            className="h-11 bg-background/40 border-border/40 hover:border-primary/20"
           >
             Reset
           </Button>
@@ -643,7 +701,7 @@ export function BatchComposer({
               approvalAmount === 0n ||
               !needsApproval
             }
-            className="h-11 gap-2 border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
+            className="h-11 gap-2 border-primary/30 bg-primary/8 text-primary hover:bg-primary/15 hover:border-primary/40 transition-all"
           >
             {approvalState === "signing" ||
             approvalState === "confirming" ? (
@@ -656,12 +714,14 @@ export function BatchComposer({
           <Button
             onClick={handleSubmit}
             disabled={isBusy || needsApproval || insufficientBalance}
-            className="h-11 gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+            className="glow-btn h-11 gap-2 bg-gradient-to-r from-primary to-violet-500 text-primary-foreground hover:brightness-110 shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 transition-all active:scale-[0.97]"
           >
             {submitState === "simulating" ||
             submitState === "wallet" ||
             submitState === "confirming" ? (
               <Loader2 className="h-4 w-4 animate-spin" />
+            ) : submitState === "confirmed" ? (
+              <CheckCircle2 className="h-4 w-4" />
             ) : (
               <Rocket className="h-4 w-4" />
             )}

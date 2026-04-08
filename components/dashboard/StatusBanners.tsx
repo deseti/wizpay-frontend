@@ -47,11 +47,13 @@ export function StatusBanners({
   return (
     <>
       {statusMessage ? (
-        <Card className="glass-card border-primary/30">
+        <Card className="glass-card border-primary/25 animate-fade-up">
           <CardContent className="flex items-start gap-3 pt-4">
-            <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-primary" />
+            <div className="mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary/15">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">
+              <p className="text-sm font-semibold text-foreground">
                 Batch status
               </p>
               <p className="text-sm text-muted-foreground">{statusMessage}</p>
@@ -61,11 +63,13 @@ export function StatusBanners({
       ) : null}
 
       {errorMessage ? (
-        <Card className="glass-card border-destructive/40">
+        <Card className="glass-card border-destructive/30 animate-fade-up">
           <CardContent className="flex items-start gap-3 pt-4">
-            <AlertCircle className="mt-0.5 h-4 w-4 text-destructive" />
+            <div className="mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive/15">
+              <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+            </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium text-destructive">
+              <p className="text-sm font-semibold text-destructive">
                 Submission blocked
               </p>
               <p className="text-sm text-muted-foreground">{errorMessage}</p>
@@ -75,19 +79,19 @@ export function StatusBanners({
       ) : null}
 
       {approveTxHash || submitTxHash ? (
-        <Card className="glass-card border-border/60">
+        <Card className="glass-card border-border/40 animate-fade-up">
           <CardHeader>
             <CardTitle>Latest Transactions</CardTitle>
             <CardDescription>
-              Approval and batch hashes are linked directly to ArcScan.
+              Approval and batch hashes linked to ArcScan.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {approveTxHash ? (
-              <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background/50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 rounded-xl border border-border/40 bg-background/35 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm font-medium">Approval</p>
-                  <p className="break-all font-mono text-xs text-muted-foreground">
+                  <p className="text-sm font-semibold">Approval</p>
+                  <p className="break-all font-mono text-xs text-muted-foreground/70">
                     {approveTxHash}
                   </p>
                 </div>
@@ -96,7 +100,7 @@ export function StatusBanners({
                     variant="outline"
                     size="sm"
                     onClick={() => copyHash(approveTxHash)}
-                    className="gap-1"
+                    className="gap-1 border-border/40 hover:border-primary/20"
                   >
                     <Copy className="h-3.5 w-3.5" />
                     {copiedHash === approveTxHash ? "Copied" : "Copy"}
@@ -105,7 +109,7 @@ export function StatusBanners({
                     variant="outline"
                     size="sm"
                     asChild
-                    className="gap-1"
+                    className="gap-1 border-border/40 hover:border-primary/20"
                   >
                     <a
                       href={txLink(approveTxHash)}
@@ -121,18 +125,18 @@ export function StatusBanners({
             ) : null}
 
             {submitTxHash ? (
-              <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background/50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 rounded-xl border border-border/40 bg-background/35 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium">Batch Submit</p>
+                    <p className="text-sm font-semibold">Batch Submit</p>
                     {submitState === "confirmed" ? (
-                      <Badge className="gap-1 bg-emerald-500/15 text-emerald-200">
+                      <Badge className="gap-1 bg-emerald-500/15 text-emerald-300 border-emerald-500/25">
                         <CheckCircle2 className="h-3 w-3" />
                         Confirmed
                       </Badge>
                     ) : null}
                   </div>
-                  <p className="break-all font-mono text-xs text-muted-foreground">
+                  <p className="break-all font-mono text-xs text-muted-foreground/70">
                     {submitTxHash}
                   </p>
                 </div>
@@ -141,7 +145,7 @@ export function StatusBanners({
                     variant="outline"
                     size="sm"
                     onClick={() => copyHash(submitTxHash)}
-                    className="gap-1"
+                    className="gap-1 border-border/40 hover:border-primary/20"
                   >
                     <Copy className="h-3.5 w-3.5" />
                     {copiedHash === submitTxHash ? "Copied" : "Copy"}
@@ -150,7 +154,7 @@ export function StatusBanners({
                     variant="outline"
                     size="sm"
                     asChild
-                    className="gap-1"
+                    className="gap-1 border-border/40 hover:border-primary/20"
                   >
                     <a
                       href={txLink(submitTxHash)}

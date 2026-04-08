@@ -19,30 +19,36 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   ];
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-64 flex-col border-r border-border/50 bg-background/60 backdrop-blur-xl md:flex glass-card border-l-0 border-y-0 rounded-none shadow-xl">
+    <aside className="sticky top-0 hidden h-screen w-64 flex-col border-r border-border/30 bg-background/50 backdrop-blur-2xl md:flex rounded-none shadow-2xl shadow-black/20">
+      {/* Gradient right edge glow */}
+      <div className="absolute top-0 right-0 bottom-0 w-px bg-gradient-to-b from-transparent via-primary/20 to-transparent" />
+
       {/* Brand Header */}
-      <div className="flex flex-col gap-2 p-6 pb-8 border-b border-border/40">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/30 shadow-inner">
-            <ArrowRightLeft className="h-4 w-4" />
+      <div className="flex flex-col gap-2 p-6 pb-7 border-b border-border/30">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="relative">
+            <div className="absolute inset-0 rounded-xl bg-primary/20 blur-md animate-glow-pulse" />
+            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/25">
+              <ArrowRightLeft className="h-4 w-4 icon-glow" />
+            </div>
           </div>
-          <p className="text-xl font-semibold tracking-tight text-gradient">WizPay</p>
+          <p className="text-xl font-bold tracking-tight neon-text">WizPay</p>
         </div>
         <Badge
           variant="outline"
-          className="w-fit self-start gap-1.5 border-emerald-500/30 text-emerald-300/90 text-[10px] px-2 py-0.5 bg-emerald-500/5 shadow-sm"
+          className="w-fit self-start gap-1.5 border-emerald-500/25 text-emerald-300/85 text-[10px] px-2 py-0.5 bg-emerald-500/5"
         >
           <span className="status-dot w-1.5 h-1.5" />
           Live Arc Testnet
         </Badge>
-        <p className="mt-2 text-xs text-muted-foreground/80 leading-relaxed font-medium">
+        <p className="mt-1 text-xs text-muted-foreground/70 leading-relaxed font-medium">
           Mixed-token payroll routing & telemetry.
         </p>
       </div>
 
       {/* Nav Links */}
-      <nav className="flex-1 space-y-1.5 p-4 overflow-y-auto">
-        <div className="mb-2 px-2 text-[10px] font-bold tracking-wider text-muted-foreground/60 uppercase">Menu</div>
+      <nav className="flex-1 space-y-1 p-4 overflow-y-auto">
+        <div className="mb-3 px-2 text-[10px] font-bold tracking-[0.2em] text-muted-foreground/50 uppercase">Menu</div>
         {navItems.map(({ id, label, icon: Icon }) => {
           const isActive = activeTab === id;
           return (
@@ -50,17 +56,24 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
               key={id}
               onClick={() => onTabChange(id)}
               className={cn(
-                "group flex w-full items-center gap-3.5 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-200",
+                "group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-250",
                 isActive
-                  ? "bg-primary/15 text-primary shadow-sm ring-1 ring-primary/20 backdrop-blur-md"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  ? "bg-primary/12 text-primary shadow-md shadow-primary/5 ring-1 ring-primary/15"
+                  : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
               )}
             >
+              {/* Active glow bar */}
+              {isActive && (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-full bg-primary shadow-lg shadow-primary/40" />
+              )}
+
               <div className={cn(
-                "flex items-center justify-center rounded-lg p-1.5 transition-colors",
-                isActive ? "bg-primary/20 text-primary" : "text-muted-foreground group-hover:bg-muted/80 group-hover:text-foreground"
+                "flex items-center justify-center rounded-lg p-1.5 transition-all duration-250",
+                isActive
+                  ? "bg-primary/20 text-primary shadow-sm shadow-primary/10"
+                  : "text-muted-foreground group-hover:bg-muted/60 group-hover:text-foreground"
               )}>
-                <Icon className={cn("h-4 w-4 transition-transform", isActive ? "scale-110" : "")} />
+                <Icon className={cn("h-4 w-4 transition-transform duration-250", isActive ? "scale-110" : "group-hover:scale-105")} />
               </div>
               {label}
             </button>
@@ -69,8 +82,9 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       </nav>
 
       {/* Footer Area */}
-      <div className="mt-auto p-4 border-t border-border/40 bg-card/20 space-y-4">
+      <div className="mt-auto p-4 border-t border-border/30 bg-card/15 space-y-4">
         <FaucetButton />
+        <p className="text-[10px] text-center text-muted-foreground/40 font-mono">v1.0.0 · Arc Testnet</p>
       </div>
     </aside>
   );
