@@ -171,15 +171,18 @@ export function BatchComposer({
       const rows: RecipientDraft[] = [];
       const warnings: string[] = [];
 
+      // Helper to strip surrounding quotes and whitespace from CSV cells
+      const cleanCell = (val: string) => val.trim().replace(/^["']|["']$/g, "").trim();
+
       for (let i = startIdx; i < lines.length; i++) {
-        const cols = lines[i].split(delimiter).map((c) => c.trim());
+        const cols = lines[i].split(delimiter).map(cleanCell);
         const [address, amount, targetToken] = cols;
 
-        if (!address?.startsWith("0x")) {
+        if (!address || !address.startsWith("0x")) {
           warnings.push(`Row ${i + 1}: Invalid address "${address}"`);
           continue;
         }
-        if (!amount || isNaN(parseFloat(amount))) {
+        if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
           warnings.push(`Row ${i + 1}: Invalid amount "${amount}"`);
           continue;
         }
@@ -189,8 +192,8 @@ export function BatchComposer({
 
         rows.push({
           ...createRecipient(token),
-          address,
-          amount,
+          address: address.trim(),
+          amount: amount.trim(),
           targetToken: token,
         });
       }

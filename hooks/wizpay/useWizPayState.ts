@@ -91,8 +91,10 @@ export function useWizPayState() {
   const validate = useCallback(() => {
     const nextErrors: Record<string, string> = {};
 
+    // Auto-populate reference ID if empty instead of blocking submission
     if (!referenceId.trim()) {
-      nextErrors.referenceId = "Reference ID is required";
+      setReferenceId(generateReferenceId());
+      // Don't add an error — we just fixed it
     }
 
     preparedRecipients.forEach((r) => {
