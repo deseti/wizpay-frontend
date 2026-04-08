@@ -25,6 +25,9 @@ export function useWizPayState() {
   const [currentBatchNumber, setCurrentBatchNumber] = useState<number>(1);
   const [totalBatches, setTotalBatches] = useState<number>(1);
 
+  const [sessionTotalAmount, setSessionTotalAmount] = useState<bigint>(0n);
+  const [sessionTotalRecipients, setSessionTotalRecipients] = useState<number>(0);
+
   useEffect(() => {
     setReferenceId(generateReferenceId());
   }, []);
@@ -88,6 +91,8 @@ export function useWizPayState() {
       setCurrentBatchNumber(1);
     }
     setErrors({});
+    setSessionTotalAmount(0n);
+    setSessionTotalRecipients(0);
   }, []);
 
   const loadNextBatch = useCallback(() => {
@@ -179,6 +184,8 @@ export function useWizPayState() {
     setSubmitTxHash(null);
     setStatusMessage(null);
     setErrorMessage(null);
+    setSessionTotalAmount(0n);
+    setSessionTotalRecipients(0);
   }, []);
 
   const dismissSuccessModal = useCallback(() => {
@@ -232,5 +239,9 @@ export function useWizPayState() {
     currentBatchNumber,
     totalBatches,
     loadNextBatch,
+    sessionTotalAmount,
+    setSessionTotalAmount,
+    sessionTotalRecipients,
+    setSessionTotalRecipients,
   };
 }

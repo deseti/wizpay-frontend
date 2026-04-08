@@ -135,10 +135,10 @@ export default function DashboardPage() {
                     isOpen={wp.submitState === "confirmed" && wp.currentBatchNumber === wp.totalBatches}
                     onClose={wp.dismissSuccessModal}
                     txHash={wp.submitTxHash}
-                    totalAmount={wp.batchAmount}
+                    totalAmount={wp.sessionTotalAmount}
                     tokenSymbol={wp.selectedToken}
                     decimals={wp.activeToken.decimals}
-                    recipientCount={wp.validRecipientCount}
+                    recipientCount={wp.sessionTotalRecipients}
                   />
                 </div>
               )}

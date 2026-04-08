@@ -120,6 +120,10 @@ export interface WizPayState {
   pendingBatches: RecipientDraft[][];
   currentBatchNumber: number;
   totalBatches: number;
+  sessionTotalAmount: bigint;
+  setSessionTotalAmount: (amount: bigint | ((prev: bigint) => bigint)) => void;
+  sessionTotalRecipients: number;
+  setSessionTotalRecipients: (count: number | ((prev: number) => number)) => void;
 
   /* actions */
   handleApprove: () => Promise<void>;

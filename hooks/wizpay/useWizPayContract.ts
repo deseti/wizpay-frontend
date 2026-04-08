@@ -8,6 +8,8 @@ import {
   useWriteContract,
 } from "wagmi";
 
+import { useToast } from "@/hooks/use-toast";
+
 import { WIZPAY_ABI } from "@/constants/abi";
 import { WIZPAY_ADDRESS } from "@/constants/addresses";
 import { ERC20_ABI } from "@/constants/erc20";
@@ -36,6 +38,7 @@ export function useWizPayContract({
   const { address: walletAddress } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
+  const { toast } = useToast();
 
   const activeToken = SUPPORTED_TOKENS[state.selectedToken];
 
@@ -273,6 +276,16 @@ export function useWizPayContract({
 
       state.setSubmitState("confirmed");
       state.setStatusMessage(null);
+
+      state.setSessionTotalAmount((prev) => prev + batchAmount);
+      state.setSessionTotalRecipients((prev) => prev + validRecipientCount);
+
+      if (state.currentBatchNumber < state.totalBatches) {
+        toast({
+          title: "Batch Successful",
+          description: `Batch ${state.currentBatchNumber} of ${state.totalBatches} completed! You can now proceed to the next block.`,
+        });
+      }
       
       // Auto refetching happens via history watcher generally, but we do one manual push to ensure UI refreshes immediately
       await Promise.all([
