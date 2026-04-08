@@ -21,6 +21,10 @@ export function useWizPayState() {
   const [referenceId, setReferenceId] = useState<string>("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  const [pendingBatches, setPendingBatches] = useState<RecipientDraft[][]>([]);
+  const [currentBatchNumber, setCurrentBatchNumber] = useState<number>(1);
+  const [totalBatches, setTotalBatches] = useState<number>(1);
+
   useEffect(() => {
     setReferenceId(generateReferenceId());
   }, []);
@@ -69,12 +73,49 @@ export function useWizPayState() {
 
   const importRecipients = useCallback((rows: RecipientDraft[]) => {
     if (rows.length > 50) {
-      setRecipients(rows.slice(0, 50));
-      setErrorMessage("A batch can contain at most 50 recipients. Excess rows were removed.");
+      const chunks: RecipientDraft[][] = [];
+      for (let i = 0; i < rows.length; i += 50) {
+        chunks.push(rows.slice(i, i + 50));
+      }
+      setRecipients(chunks[0]);
+      setPendingBatches(chunks.slice(1));
+      setTotalBatches(chunks.length);
+      setCurrentBatchNumber(1);
     } else {
       setRecipients(rows);
+      setPendingBatches([]);
+      setTotalBatches(1);
+      setCurrentBatchNumber(1);
     }
     setErrors({});
+  }, []);
+
+  const loadNextBatch = useCallback(() => {
+    setPendingBatches((current) => {
+      if (current.length === 0) return current;
+      const [nextBatch, ...rest] = current;
+      setRecipients(nextBatch);
+      return rest;
+    });
+
+    setCurrentBatchNumber((prev) => prev + 1);
+
+    setApprovalState("idle");
+    setSubmitState("idle");
+    setApproveTxHash(null);
+    setSubmitTxHash(null);
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setErrors({});
+
+    setReferenceId((prevId) => {
+      if (!prevId) return generateReferenceId();
+      const match = prevId.match(/(.*)-(\d+)$/);
+      if (match) {
+        return `${match[1]}-${parseInt(match[2], 10) + 1}`;
+      }
+      return `${prevId}-2`;
+    });
   }, []);
 
   // Compute prepared recipients
@@ -129,6 +170,9 @@ export function useWizPayState() {
     setRecipients([createRecipient("USDC")]);
     setReferenceId(generateReferenceId());
     setErrors({});
+    setPendingBatches([]);
+    setCurrentBatchNumber(1);
+    setTotalBatches(1);
     setApprovalState("idle");
     setSubmitState("idle");
     setApproveTxHash(null);
@@ -184,5 +228,9 @@ export function useWizPayState() {
     setErrorMessage,
     copiedHash,
     copyHash,
+    pendingBatches,
+    currentBatchNumber,
+    totalBatches,
+    loadNextBatch,
   };
 }

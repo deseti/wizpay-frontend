@@ -116,10 +116,16 @@ export interface WizPayState {
   errorMessage: string | null;
   isBusy: boolean;
 
+  /* chunking state */
+  pendingBatches: RecipientDraft[][];
+  currentBatchNumber: number;
+  totalBatches: number;
+
   /* actions */
   handleApprove: () => Promise<void>;
   handleSubmit: () => Promise<void>;
   resetComposer: () => void;
+  loadNextBatch: () => void;
   dismissSuccessModal: () => void;
   setStatusMessage: (msg: string | null) => void;
   setErrorMessage: (msg: string | null) => void;

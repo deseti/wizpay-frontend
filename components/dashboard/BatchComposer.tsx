@@ -81,6 +81,9 @@ interface BatchComposerProps {
   resetComposer: () => void;
   setErrorMessage: (msg: string | null) => void;
   importRecipients: (rows: RecipientDraft[]) => void;
+  totalBatches: number;
+  currentBatchNumber: number;
+  loadNextBatch: () => void;
 }
 
 export function BatchComposer({
@@ -113,6 +116,9 @@ export function BatchComposer({
   resetComposer,
   setErrorMessage,
   importRecipients,
+  totalBatches,
+  currentBatchNumber,
+  loadNextBatch,
 }: BatchComposerProps) {
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [csvLoading, setCsvLoading] = useState(false);
@@ -174,6 +180,8 @@ export function BatchComposer({
       // Helper to strip surrounding quotes and whitespace from CSV cells
       const cleanCell = (val: string) => val.trim().replace(/^["']|["']$/g, "").trim();
 
+      const seenAddresses = new Set<string>();
+
       for (let i = startIdx; i < lines.length; i++) {
         const cols = lines[i].split(delimiter).map(cleanCell);
         const [address, amount, targetToken] = cols;
@@ -187,6 +195,20 @@ export function BatchComposer({
           continue;
         }
 
+        const normalizedAddress = address.trim().toLowerCase();
+        if (seenAddresses.has(normalizedAddress)) {
+          setCsvLoading(false);
+          setErrorMessage(`CSV Upload Blocked: Duplicate address "${address}" found on row ${i + 1}.`);
+          toast({
+             title: "Duplicate Found",
+             description: `Address ${address} appears multiple times. Please fix and re-upload.`,
+             variant: "destructive",
+          });
+          if (csvInputRef.current) csvInputRef.current.value = "";
+          return;
+        }
+        seenAddresses.add(normalizedAddress);
+
         const token =
           targetToken?.toUpperCase() === "EURC" ? "EURC" : selectedToken;
 
@@ -196,11 +218,6 @@ export function BatchComposer({
           amount: amount.trim(),
           targetToken: token,
         });
-
-        if (rows.length === 50) {
-          warnings.push(`Max batch size of 50 reached. Remaining rows excluded.`);
-          break;
-        }
       }
 
       setCsvLoading(false);
@@ -253,6 +270,11 @@ export function BatchComposer({
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {totalBatches > 1 && (
+              <Badge variant="default" className="font-mono text-[11px] bg-primary text-primary-foreground">
+                Batch {currentBatchNumber} of {totalBatches}
+              </Badge>
+            )}
             <Badge variant="outline" className="font-mono text-[11px] border-primary/20 text-primary/70 bg-primary/5">
               {formatCompactAddress(WIZPAY_ADDRESS)}
             </Badge>
@@ -700,41 +722,54 @@ export function BatchComposer({
           >
             Reset
           </Button>
-          <Button
-            variant="outline"
-            onClick={handleApprove}
-            disabled={
-              isBusy ||
-              insufficientBalance ||
-              approvalAmount === 0n ||
-              !needsApproval
-            }
-            className="h-11 gap-2 border-primary/30 bg-primary/8 text-primary hover:bg-primary/15 hover:border-primary/40 transition-all"
-          >
-            {approvalState === "signing" ||
-            approvalState === "confirming" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ShieldCheck className="h-4 w-4" />
-            )}
-            {approvalText}
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={isBusy || needsApproval || insufficientBalance}
-            className="glow-btn h-11 gap-2 bg-gradient-to-r from-primary to-violet-500 text-primary-foreground hover:brightness-110 shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 transition-all active:scale-[0.97]"
-          >
-            {submitState === "simulating" ||
-            submitState === "wallet" ||
-            submitState === "confirming" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : submitState === "confirmed" ? (
+
+          {submitState === "confirmed" && currentBatchNumber < totalBatches ? (
+            <Button
+              onClick={loadNextBatch}
+              className="glow-btn h-11 gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-primary-foreground hover:brightness-110 shadow-lg shadow-emerald-500/20 transition-all active:scale-[0.97]"
+            >
               <CheckCircle2 className="h-4 w-4" />
-            ) : (
-              <Rocket className="h-4 w-4" />
-            )}
-            {primaryActionText}
-          </Button>
+              Process Next Batch
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                onClick={handleApprove}
+                disabled={
+                  isBusy ||
+                  insufficientBalance ||
+                  approvalAmount === 0n ||
+                  !needsApproval
+                }
+                className="h-11 gap-2 border-primary/30 bg-primary/8 text-primary hover:bg-primary/15 hover:border-primary/40 transition-all"
+              >
+                {approvalState === "signing" ||
+                approvalState === "confirming" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="h-4 w-4" />
+                )}
+                {approvalText}
+              </Button>
+              <Button
+                onClick={handleSubmit}
+                disabled={isBusy || needsApproval || insufficientBalance}
+                className="glow-btn h-11 gap-2 bg-gradient-to-r from-primary to-violet-500 text-primary-foreground hover:brightness-110 shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 transition-all active:scale-[0.97]"
+              >
+                {submitState === "simulating" ||
+                submitState === "wallet" ||
+                submitState === "confirming" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : submitState === "confirmed" ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  <Rocket className="h-4 w-4" />
+                )}
+                {primaryActionText}
+              </Button>
+            </>
+          )}
         </div>
       </CardFooter>
     </Card>

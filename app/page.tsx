@@ -105,6 +105,9 @@ export default function DashboardPage() {
                       resetComposer={wp.resetComposer}
                       setErrorMessage={wp.setErrorMessage}
                       importRecipients={wp.importRecipients}
+                      totalBatches={wp.totalBatches}
+                      currentBatchNumber={wp.currentBatchNumber}
+                      loadNextBatch={wp.loadNextBatch}
                     />
 
                     <PreflightPanel
@@ -129,7 +132,7 @@ export default function DashboardPage() {
                   />
 
                   <SuccessModal
-                    isOpen={wp.submitState === "confirmed"}
+                    isOpen={wp.submitState === "confirmed" && wp.currentBatchNumber === wp.totalBatches}
                     onClose={wp.dismissSuccessModal}
                     txHash={wp.submitTxHash}
                     totalAmount={wp.batchAmount}
