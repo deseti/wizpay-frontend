@@ -61,6 +61,10 @@ export function useWizPayContract({
     functionName: "feeBps",
   });
 
+  useEffect(() => {
+    refetchAllowance();
+  }, [state.currentBatchNumber, refetchAllowance]);
+
   const { data: fxEngineData } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
@@ -272,6 +276,7 @@ export function useWizPayContract({
       
       // Auto refetching happens via history watcher generally, but we do one manual push to ensure UI refreshes immediately
       await Promise.all([
+        refetchAllowance(),
         refetchBalance(),
         refetchEngineBalances()
       ]);
