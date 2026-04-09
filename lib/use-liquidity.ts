@@ -1,6 +1,6 @@
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
-import { STABLE_FX_ADAPTER_ADDRESS } from "@/constants/addresses";
-import { STABLE_FX_ADAPTER_ABI } from "@/constants/stablefx-abi";
+import { STABLE_FX_ADAPTER_V2_ADDRESS } from "@/constants/addresses";
+import { STABLE_FX_ADAPTER_V2_ABI } from "@/constants/stablefx-abi";
 import { ERC20_ABI } from "@/constants/erc20";
 import type { Address } from "viem";
 
@@ -9,15 +9,15 @@ export function useLiquidity(tokenAddress: Address) {
 
   // Liquidity Vault total supply
   const { data: totalSupply, refetch: refetchTotalSupply } = useReadContract({
-    address: STABLE_FX_ADAPTER_ADDRESS,
-    abi: STABLE_FX_ADAPTER_ABI,
+    address: STABLE_FX_ADAPTER_V2_ADDRESS,
+    abi: STABLE_FX_ADAPTER_V2_ABI,
     functionName: "totalSupply",
   });
 
   // User's LP Balance (SFX-LP is the adapter itself, which is an ERC20)
   const { data: lpBalance, refetch: refetchLpBalance } = useReadContract({
-    address: STABLE_FX_ADAPTER_ADDRESS,
-    abi: STABLE_FX_ADAPTER_ABI,
+    address: STABLE_FX_ADAPTER_V2_ADDRESS,
+    abi: STABLE_FX_ADAPTER_V2_ABI,
     functionName: "balanceOf",
     args: [address as Address],
     query: { enabled: !!address },
@@ -28,7 +28,7 @@ export function useLiquidity(tokenAddress: Address) {
     address: tokenAddress,
     abi: ERC20_ABI,
     functionName: "allowance",
-    args: [address as Address, STABLE_FX_ADAPTER_ADDRESS],
+    args: [address as Address, STABLE_FX_ADAPTER_V2_ADDRESS],
     query: { enabled: !!address },
   });
 
@@ -36,10 +36,10 @@ export function useLiquidity(tokenAddress: Address) {
   // Note: The contract uses _burn(msg.sender, shares) which is internal,
   // so no external approval is needed. We track it anyway for UX consistency.
   const { data: lpAllowance, refetch: refetchLpAllowance } = useReadContract({
-    address: STABLE_FX_ADAPTER_ADDRESS,
-    abi: STABLE_FX_ADAPTER_ABI,
+    address: STABLE_FX_ADAPTER_V2_ADDRESS,
+    abi: STABLE_FX_ADAPTER_V2_ABI,
     functionName: "allowance",
-    args: [address as Address, STABLE_FX_ADAPTER_ADDRESS],
+    args: [address as Address, STABLE_FX_ADAPTER_V2_ADDRESS],
     query: { enabled: !!address },
   });
 
@@ -60,24 +60,24 @@ export function useLiquidity(tokenAddress: Address) {
       address: tokenAddress,
       abi: ERC20_ABI,
       functionName: "approve",
-      args: [STABLE_FX_ADAPTER_ADDRESS, amount],
+      args: [STABLE_FX_ADAPTER_V2_ADDRESS, amount],
     });
   };
 
   // Approve SFX-LP to adapter (for withdraw)
   const approveLpToken = async (amount: bigint) => {
     return await writeContract({
-      address: STABLE_FX_ADAPTER_ADDRESS,
-      abi: STABLE_FX_ADAPTER_ABI,
+      address: STABLE_FX_ADAPTER_V2_ADDRESS,
+      abi: STABLE_FX_ADAPTER_V2_ABI,
       functionName: "approve",
-      args: [STABLE_FX_ADAPTER_ADDRESS, amount],
+      args: [STABLE_FX_ADAPTER_V2_ADDRESS, amount],
     });
   };
 
   const addLiquidity = async (amount: bigint) => {
     return await writeContract({
-      address: STABLE_FX_ADAPTER_ADDRESS,
-      abi: STABLE_FX_ADAPTER_ABI,
+      address: STABLE_FX_ADAPTER_V2_ADDRESS,
+      abi: STABLE_FX_ADAPTER_V2_ABI,
       functionName: "addLiquidity",
       args: [tokenAddress, amount],
     });
@@ -85,8 +85,8 @@ export function useLiquidity(tokenAddress: Address) {
 
   const removeLiquidity = async (shares: bigint) => {
     return await writeContract({
-      address: STABLE_FX_ADAPTER_ADDRESS,
-      abi: STABLE_FX_ADAPTER_ABI,
+      address: STABLE_FX_ADAPTER_V2_ADDRESS,
+      abi: STABLE_FX_ADAPTER_V2_ABI,
       functionName: "removeLiquidity",
       args: [tokenAddress, shares],
     });

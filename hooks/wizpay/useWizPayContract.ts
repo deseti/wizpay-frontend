@@ -23,6 +23,11 @@ import {
 } from "@/lib/wizpay";
 import type { PreparedRecipient, QuoteSummary, WizPayState } from "@/lib/types";
 import type { useWizPayState } from "./useWizPayState";
+import {
+  isStableFxMode,
+  activeFxEngineAddress,
+  fxProviderLabel,
+} from "@/lib/fx-config";
 
 type BaseState = ReturnType<typeof useWizPayState>;
 
@@ -96,24 +101,29 @@ export function useWizPayContract({
   });
 
   // Liquidity Engine Balances
+  // In StableFX mode, read balances from the FxEscrow contract directly.
+  // In legacy mode, read from the on-chain fxEngine address.
   const USDC_A = SUPPORTED_TOKENS["USDC"].address;
   const EURC_A = SUPPORTED_TOKENS["EURC"].address;
+  const engineAddressForBalances = isStableFxMode
+    ? activeFxEngineAddress
+    : (fxEngineData as Address | undefined);
   const { data: lBalancesData, refetch: refetchEngineBalances } = useReadContracts({
     contracts: [
       {
         address: USDC_A,
         abi: ERC20_ABI,
         functionName: "balanceOf",
-        args: fxEngineData ? [fxEngineData as Address] : undefined,
+        args: engineAddressForBalances ? [engineAddressForBalances] : undefined,
       },
       {
         address: EURC_A,
         abi: ERC20_ABI,
         functionName: "balanceOf",
-        args: fxEngineData ? [fxEngineData as Address] : undefined,
+        args: engineAddressForBalances ? [engineAddressForBalances] : undefined,
       },
     ],
-    query: { enabled: !!fxEngineData, refetchInterval: 15000 },
+    query: { enabled: !!engineAddressForBalances, refetchInterval: 15000 },
   });
 
   const currentAllowance = currentAllowanceData ?? 0n;
@@ -211,6 +221,16 @@ export function useWizPayContract({
     state.setSubmitState("simulating");
     state.setErrorMessage(null);
     state.setStatusMessage("Building and simulating transaction...");
+
+    // TODO: StableFX Permit2 signing flow
+    // When isStableFxMode is true, the full institutional flow would be:
+    //   1. Call /api/fx/quote with recipientAddress to get a tradable quote + typedData
+    //   2. Prompt user to sign typedData via eth_signTypedData_v4 (Privy/MetaMask)
+    //   3. Call /api/fx/execute with the signature to trigger FxEscrow settlement
+    //   4. FxEscrow pulls source tokens via Permit2 and delivers target tokens
+    // This replaces the on-chain batchRouteAndPay → StableFXAdapter.swap() path.
+    // For now, both modes still use batchRouteAndPay on-chain.
+    // The FxEscrow settlement will be wired once Circle StableFX access is confirmed.
 
     const recipientsArray = state.preparedRecipients.map((r) => r.address as Address);
     const amountsInArray = state.preparedRecipients.map((r) => r.amountUnits);
@@ -334,6 +354,14 @@ export function useWizPayContract({
     estimatedGas,
     refetchAllowance,
     refetchBalance,
-    refetchEngineBalances
+    refetchEngineBalances,
+    /** Active FX mode metadata for UI display */
+    fxMeta: {
+      isStableFxMode,
+      providerLabel: fxProviderLabel,
+      engineAddress: isStableFxMode
+        ? activeFxEngineAddress
+        : (fxEngineData as Address | undefined),
+    },
   };
 }

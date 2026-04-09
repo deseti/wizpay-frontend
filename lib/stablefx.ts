@@ -1,25 +1,31 @@
 /**
- * StableFX Service — Mock RFQ Engine
+ * StableFX Service — Circle Integration Layer
  *
- * Encapsulates all FX quoting and execution logic for WizPay.
- * Currently returns deterministic mock data that mirrors the shape
- * of a real Circle StableFX RFQ response so the frontend can
- * integrate against a stable contract today.
+ * Maps Circle StableFX API responses into the WizPay-internal
+ * FxQuote / FxTrade types that the frontend already consumes.
  *
- * ── Future migration path ──
- * 1. Replace `requestQuote` with a POST to Circle's StableFX /quotes endpoint.
- * 2. Replace `executeTrade` with a POST to /trades that references quote.id.
- * 3. Replace `getTradeStatus` with a GET to /trades/:tradeId.
+ * This layer exists so the API routes and UI never depend on
+ * Circle's response shape directly. If the upstream provider
+ * changes (e.g. to Arc-native FX routing), only this file needs
+ * to be updated.
  */
 
 import { randomUUID } from "node:crypto";
+import {
+  createQuote,
+  createTrade,
+  getTradeById,
+  CircleApiError,
+  type CircleTypedData,
+} from "./circle";
 
-// ─── Types ───────────────────────────────────────────────────────────
+// ─── WizPay Internal Types ──────────────────────────────────────────
 
 export interface FxQuoteRequest {
   sourceCurrency: string; // e.g. "USDC"
   targetCurrency: string; // e.g. "EURC"
   sourceAmount: string; // e.g. "1000.00"
+  recipientAddress?: string; // Required for tradable quotes
 }
 
 export interface FxQuote {
@@ -33,11 +39,14 @@ export interface FxQuote {
   feeCurrency: string;
   expiresAt: string; // ISO-8601
   provider: string;
+  /** Permit2 EIP-712 typed data for signing (tradable quotes only) */
+  typedData?: CircleTypedData;
 }
 
 export interface FxTradeRequest {
   quoteId: string;
   senderAddress: string;
+  signature: string; // EIP-712 signature from user's wallet
   referenceId?: string;
 }
 
@@ -56,102 +65,121 @@ export interface FxTrade {
   settledAt: string | null;
 }
 
-// ─── Mock rate table (mirrors on-chain StableFXAdapter rates) ────────
-
-const MOCK_RATES: Record<string, Record<string, number>> = {
-  USDC: { EURC: 0.917, USYC: 1.0 },
-  EURC: { USDC: 1.09, USYC: 1.09 },
-  USYC: { USDC: 1.0, EURC: 0.917 },
-};
-
-const FEE_BPS = 25; // 0.25 % (matches on-chain lpFeeBps)
-
 // ─── Service Functions ───────────────────────────────────────────────
 
-export function requestQuote(req: FxQuoteRequest): FxQuote {
-  const { sourceCurrency, targetCurrency, sourceAmount } = req;
+/**
+ * Request a live FX quote from Circle StableFX and map it
+ * into the WizPay-internal FxQuote shape.
+ *
+ * If recipientAddress is provided, requests a "tradable" quote
+ * that includes Permit2 typedData for signing. Otherwise, returns
+ * a "reference" quote (rate check only, not executable).
+ */
+export async function requestQuote(req: FxQuoteRequest): Promise<FxQuote> {
+  const isTradable = !!req.recipientAddress;
 
-  const rate = MOCK_RATES[sourceCurrency]?.[targetCurrency];
-  if (rate === undefined) {
-    throw new Error(
-      `Unsupported pair: ${sourceCurrency} → ${targetCurrency}`
-    );
-  }
+  const circleRes = await createQuote({
+    from: {
+      currency: req.sourceCurrency,
+      amount: req.sourceAmount,
+    },
+    to: {
+      currency: req.targetCurrency,
+    },
+    tenor: "instant",
+    type: isTradable ? "tradable" : "reference",
+    ...(isTradable ? { recipientAddress: req.recipientAddress } : {}),
+  });
 
-  // TODO: Replace with real Circle StableFX API call
-  // const res = await circleClient.post("/stablefx/quotes", {
-  //   sourceCurrency,
-  //   targetCurrency,
-  //   sourceAmount,
-  // });
-  // return mapCircleQuoteToFxQuote(res.data);
-
-  const source = parseFloat(sourceAmount);
-  const grossOut = source * rate;
-  const fee = (grossOut * FEE_BPS) / 10_000;
-  const netOut = grossOut - fee;
+  // Circle returns `rate` (number) and `fee` (string in "to" currency)
+  const q = circleRes;
 
   return {
-    quoteId: randomUUID(),
-    sourceCurrency,
-    targetCurrency,
-    sourceAmount: source.toFixed(2),
-    targetAmount: netOut.toFixed(2),
-    exchangeRate: rate.toFixed(6),
-    feeAmount: fee.toFixed(2),
-    feeCurrency: targetCurrency,
-    expiresAt: new Date(Date.now() + 30_000).toISOString(), // 30 s validity
-    provider: "wizpay-mock-fx",
+    quoteId: q.id,
+    sourceCurrency: q.from.currency,
+    targetCurrency: q.to.currency,
+    sourceAmount: q.from.amount,
+    targetAmount: q.to.amount,
+    exchangeRate: String(q.rate),
+    feeAmount: q.fee,
+    feeCurrency: q.to.currency, // Circle fee is denominated in "to" currency
+    expiresAt: q.expiresAt,
+    provider: "circle-stablefx",
+    ...(q.typedData ? { typedData: q.typedData } : {}),
   };
 }
 
-export function executeTrade(req: FxTradeRequest): FxTrade {
-  // TODO: Replace with real Circle StableFX API call
-  // 1. Validate the quoteId hasn't expired
-  // 2. Lock sender funds via Permit2
-  // 3. Submit the settlement to Circle StableFX or on-chain escrow
-  // 4. Return a pending trade that the client polls via getTradeStatus
-  //
-  // const res = await circleClient.post("/stablefx/trades", {
-  //   quoteId: req.quoteId,
-  //   senderAddress: req.senderAddress,
-  //   referenceId: req.referenceId,
-  // });
-  // return mapCircleTradeToFxTrade(res.data);
+/**
+ * Execute a previously quoted FX trade through Circle StableFX.
+ *
+ * ── Permit2 flow ──
+ * The signature parameter is the user's EIP-712 signature over the
+ * typedData returned in the quote response. The flow is:
+ *   1. Frontend calls requestQuote() with recipientAddress → gets typedData.
+ *   2. Frontend prompts user to sign typedData via eth_signTypedData_v4.
+ *   3. Frontend calls executeTrade() with the hex signature.
+ *   4. Circle's FxEscrow contract pulls tokens via Permit2 and settles.
+ */
+export async function executeTrade(req: FxTradeRequest): Promise<FxTrade> {
+  const circleRes = await createTrade({
+    quoteId: req.quoteId,
+    signature: req.signature,
+  });
+
+  const t = circleRes;
 
   return {
-    tradeId: randomUUID(),
-    quoteId: req.quoteId,
-    status: "processing",
-    sourceCurrency: "USDC",
-    targetCurrency: "EURC",
-    sourceAmount: "1000.00",
-    targetAmount: "914.58",
-    exchangeRate: "0.917000",
+    tradeId: t.id,
+    quoteId: t.quoteId,
+    status: normalizeStatus(t.status),
+    sourceCurrency: t.from.currency,
+    targetCurrency: t.to.currency,
+    sourceAmount: t.from.amount,
+    targetAmount: t.to.amount,
+    exchangeRate: String(t.rate),
     senderAddress: req.senderAddress,
     referenceId: req.referenceId || "",
-    createdAt: new Date().toISOString(),
-    settledAt: null,
+    createdAt: t.createdAt,
+    settledAt: t.settledAt ?? null,
   };
 }
 
-export function getTradeStatus(tradeId: string): FxTrade {
-  // TODO: Replace with real Circle StableFX API call
-  // const res = await circleClient.get(`/stablefx/trades/${tradeId}`);
-  // return mapCircleTradeToFxTrade(res.data);
+/**
+ * Check the settlement status of an in-flight trade.
+ */
+export async function getTradeStatus(tradeId: string): Promise<FxTrade> {
+  const circleRes = await getTradeById(tradeId);
+
+  const t = circleRes;
 
   return {
-    tradeId,
-    quoteId: "mock-quote-id",
-    status: "settled",
-    sourceCurrency: "USDC",
-    targetCurrency: "EURC",
-    sourceAmount: "1000.00",
-    targetAmount: "914.58",
-    exchangeRate: "0.917000",
-    senderAddress: "0x0000000000000000000000000000000000000000",
+    tradeId: t.id,
+    quoteId: t.quoteId,
+    status: normalizeStatus(t.status),
+    sourceCurrency: t.from.currency,
+    targetCurrency: t.to.currency,
+    sourceAmount: t.from.amount,
+    targetAmount: t.to.amount,
+    exchangeRate: String(t.rate),
+    senderAddress: "",
     referenceId: "",
-    createdAt: new Date(Date.now() - 60_000).toISOString(),
-    settledAt: new Date().toISOString(),
+    createdAt: t.createdAt,
+    settledAt: t.settledAt ?? null,
   };
+}
+
+// ─── Re-export for route handlers ───────────────────────────────────
+
+export { CircleApiError };
+
+// ─── Helpers ────────────────────────────────────────────────────────
+
+function normalizeStatus(
+  raw: string
+): "pending" | "processing" | "settled" | "failed" {
+  const s = raw.toLowerCase();
+  if (s === "settled" || s === "complete" || s === "completed") return "settled";
+  if (s === "failed" || s === "expired" || s === "cancelled") return "failed";
+  if (s === "processing" || s === "executing") return "processing";
+  return "pending";
 }

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { requestQuote } from "@/lib/stablefx";
+import { requestQuote, CircleApiError } from "@/lib/stablefx";
 
 /**
  * POST /api/fx/quote
  *
- * Request an FX quote for a stablecoin conversion.
+ * Request a live FX quote for a stablecoin conversion.
+ * Calls Circle StableFX API under the hood.
  *
  * Body: { sourceCurrency, targetCurrency, sourceAmount }
  * Returns: { data: FxQuote }
@@ -24,11 +25,21 @@ export async function POST(request: Request) {
       );
     }
 
-    const quote = requestQuote({ sourceCurrency, targetCurrency, sourceAmount });
+    const quote = await requestQuote({
+      sourceCurrency,
+      targetCurrency,
+      sourceAmount,
+    });
 
     return NextResponse.json({ data: quote });
   } catch (err: unknown) {
+    if (err instanceof CircleApiError) {
+      return NextResponse.json(
+        { error: err.message, code: err.code },
+        { status: err.status }
+      );
+    }
     const message = err instanceof Error ? err.message : "Internal error";
-    return NextResponse.json({ error: message }, { status: 422 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

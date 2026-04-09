@@ -1,4 +1,4 @@
-export const STABLE_FX_ADAPTER_ABI = [
+export const STABLE_FX_ADAPTER_V2_ABI = [
   {
     "inputs": [
       {

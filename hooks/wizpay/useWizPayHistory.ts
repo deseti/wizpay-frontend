@@ -13,8 +13,9 @@ import {
   WIZPAY_ADDRESS,
   WIZPAY_HISTORY_ADDRESSES,
   WIZPAY_HISTORY_FROM_BLOCK,
-  STABLE_FX_ADAPTER_ADDRESS,
+  STABLE_FX_ADAPTER_V2_ADDRESS,
 } from "@/constants/addresses";
+import { activeFxEngineAddress } from "@/lib/fx-config";
 import { sameAddress, type TokenSymbol } from "@/lib/wizpay";
 import type { HistoryItem, UnifiedHistoryItem } from "@/lib/types";
 
@@ -109,7 +110,7 @@ export function useWizPayHistory({
     queryKey: [
       "lp-history",
       walletAddress ?? "disconnected",
-      STABLE_FX_ADAPTER_ADDRESS,
+      activeFxEngineAddress, // Uses FxEscrow in stablefx mode, adapter in legacy
     ],
     enabled: Boolean(publicClient && walletAddress),
     queryFn: async (): Promise<UnifiedHistoryItem[]> => {
@@ -125,7 +126,7 @@ export function useWizPayHistory({
 
         addedPromises.push(
           publicClient!.getLogs({
-            address: STABLE_FX_ADAPTER_ADDRESS,
+            address: activeFxEngineAddress,
             event: LIQUIDITY_ADDED_EVENT,
             fromBlock: from,
             toBlock: to,
@@ -133,7 +134,7 @@ export function useWizPayHistory({
         );
         removedPromises.push(
           publicClient!.getLogs({
-            address: STABLE_FX_ADAPTER_ADDRESS,
+            address: activeFxEngineAddress,
             event: LIQUIDITY_REMOVED_EVENT,
             fromBlock: from,
             toBlock: to,

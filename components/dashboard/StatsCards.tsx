@@ -18,7 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { STABLE_FX_ADAPTER_ADDRESS } from "@/constants/addresses";
+import { STABLE_FX_ADAPTER_V2_ADDRESS } from "@/constants/addresses";
+import { fxProviderLabel, activeFxEngineAddress, isStableFxMode } from "@/lib/fx-config";
 import {
   formatCompactAddress,
   formatTokenAmount,
@@ -165,7 +166,9 @@ export function StatsCards({
             FX Engine
           </CardTitle>
           <CardDescription>
-            Live pool liquidity for routing.
+            {isStableFxMode
+              ? "Circle StableFX institutional rates."
+              : "Live pool liquidity for routing."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2.5 relative">
@@ -182,10 +185,10 @@ export function StatsCards({
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground/60 font-mono">
-            Engine:{" "}
+            {fxProviderLabel}:{" "}
             {fxEngineData
               ? formatCompactAddress(fxEngineData)
-              : formatCompactAddress(STABLE_FX_ADAPTER_ADDRESS)}
+              : formatCompactAddress(activeFxEngineAddress)}
           </p>
         </CardContent>
       </Card>

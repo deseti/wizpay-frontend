@@ -14,5 +14,13 @@ export const USDC_ADDRESS =
   "0x3600000000000000000000000000000000000000" as Address;
 export const EURC_ADDRESS =
   "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a" as Address;
-export const STABLE_FX_ADAPTER_ADDRESS =
-  "0xA05921a4B0dbBF0232C5754e4A2341D6A0E77a3b" as Address;
+
+// ── V2 FX (custom StableFXAdapter_V2 vault) ──
+export const STABLE_FX_ADAPTER_V2_ADDRESS =
+  "0x400d3935B904cbdB6B5eb2Fd50E6843f1b0AD8d6" as Address;
+
+// ── Official Arc + Circle StableFX settlement ──
+export const FX_ESCROW_ADDRESS =
+  "0x867650F5eAe8df91445971f14d89fd84F0C9a9f8" as Address;
+export const PERMIT2_ADDRESS =
+  "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address;
