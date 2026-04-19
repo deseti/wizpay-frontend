@@ -2,8 +2,8 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { formatUnits, type Address, type Hex } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { formatUnits, type Address } from "viem";
+import { usePublicClient } from "wagmi";
 
 import { WIZPAY_BATCH_PAYMENT_ROUTED_EVENT } from "@/constants/abi";
 import {
@@ -18,8 +18,23 @@ import {
   getUniqueTokens,
   type PayrollEvent,
 } from "@/lib/dashboard-utils";
+import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import { useTokenBalances } from "@/hooks/useTokenBalances";
 import { useEmployeePayments } from "@/hooks/useEmployeePayments";
+
+interface PayrollEventLog {
+  transactionHash: string | null;
+  blockNumber: bigint | null;
+  args: {
+    tokenIn?: Address;
+    tokenOut?: Address;
+    totalAmountIn?: bigint;
+    totalAmountOut?: bigint;
+    totalFees?: bigint;
+    recipientCount?: bigint | number;
+    referenceId?: string;
+  };
+}
 
 /**
  * Orchestrator hook for the payroll overview dashboard.
@@ -28,7 +43,7 @@ import { useEmployeePayments } from "@/hooks/useEmployeePayments";
  */
 export function usePayrollData() {
   const publicClient = usePublicClient();
-  const { address: walletAddress } = useAccount();
+  const { walletAddress } = useActiveWalletAddress();
 
   // Token balances
   const {
@@ -56,7 +71,7 @@ export function usePayrollData() {
     queryFn: async (): Promise<PayrollEvent[]> => {
       const currentBlock = await publicClient!.getBlockNumber();
       const CHUNK_SIZE = 9999n;
-      const chunkPromises: Promise<any[]>[] = [];
+      const chunkPromises: Promise<PayrollEventLog[]>[] = [];
 
       for (const contractAddr of WIZPAY_HISTORY_ADDRESSES) {
         let from = WIZPAY_HISTORY_FROM_BLOCK;
@@ -71,7 +86,7 @@ export function usePayrollData() {
               args: { sender: walletAddress as Address },
               fromBlock: from,
               toBlock: to,
-            })
+            }) as Promise<PayrollEventLog[]>
           );
           from = to + 1n;
         }
@@ -83,8 +98,8 @@ export function usePayrollData() {
       const uniqueBlocks = Array.from(
         new Set(
           allLogs
-            .map((l) => (l.blockNumber as bigint).toString())
-            .filter(Boolean)
+            .map((log) => log.blockNumber?.toString())
+            .filter((blockNumber): blockNumber is string => Boolean(blockNumber))
         )
       );
 
@@ -98,24 +113,40 @@ export function usePayrollData() {
       const blockTs = new Map(blockEntries);
 
       return allLogs
-        .map((log: any) => ({
-          txHash: log.transactionHash as string,
-          blockNumber: log.blockNumber as bigint,
-          timestampMs:
-            blockTs.get((log.blockNumber as bigint).toString()) ?? 0,
-          tokenIn: log.args.tokenIn as Address,
-          tokenOut: log.args.tokenOut as Address,
-          totalAmountIn: log.args.totalAmountIn as bigint,
-          totalAmountOut: log.args.totalAmountOut as bigint,
-          totalFees: log.args.totalFees as bigint,
-          recipientCount: Number(log.args.recipientCount),
-          referenceId: log.args.referenceId as string,
-        }))
+        .map((log): PayrollEvent | null => {
+          if (
+            !log.transactionHash ||
+            !log.blockNumber ||
+            !log.args.tokenIn ||
+            !log.args.tokenOut ||
+            log.args.totalAmountIn === undefined ||
+            log.args.totalAmountOut === undefined ||
+            log.args.totalFees === undefined ||
+            log.args.recipientCount === undefined ||
+            log.args.referenceId === undefined
+          ) {
+            return null;
+          }
+
+          return {
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+            timestampMs: blockTs.get(log.blockNumber.toString()) ?? 0,
+            tokenIn: log.args.tokenIn,
+            tokenOut: log.args.tokenOut,
+            totalAmountIn: log.args.totalAmountIn,
+            totalAmountOut: log.args.totalAmountOut,
+            totalFees: log.args.totalFees,
+            recipientCount: Number(log.args.recipientCount),
+            referenceId: log.args.referenceId,
+          };
+        })
+        .filter((event): event is PayrollEvent => event !== null)
         .sort((a, b) => Number(b.blockNumber - a.blockNumber));
     },
   });
 
-  const events = eventsQuery.data ?? [];
+  const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
 
   // ── Computed stats ──
 

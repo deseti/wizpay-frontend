@@ -10,7 +10,6 @@
  * to be updated.
  */
 
-import { randomUUID } from "node:crypto";
 import {
   createQuote,
   createTrade,

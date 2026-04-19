@@ -13,7 +13,7 @@ import { requestQuote, CircleApiError } from "@/lib/stablefx";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { sourceCurrency, targetCurrency, sourceAmount } = body;
+    const { sourceCurrency, targetCurrency, sourceAmount, recipientAddress } = body;
 
     if (!sourceCurrency || !targetCurrency || !sourceAmount) {
       return NextResponse.json(
@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       sourceCurrency,
       targetCurrency,
       sourceAmount,
+      recipientAddress,
     });
 
     return NextResponse.json({ data: quote });

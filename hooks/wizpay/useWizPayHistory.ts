@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hex } from "viem";
-import { useAccount, usePublicClient, useWatchContractEvent } from "wagmi";
+import { usePublicClient, useWatchContractEvent } from "wagmi";
 
 import {
   WIZPAY_ABI,
@@ -13,11 +13,46 @@ import {
   WIZPAY_ADDRESS,
   WIZPAY_HISTORY_ADDRESSES,
   WIZPAY_HISTORY_FROM_BLOCK,
-  STABLE_FX_ADAPTER_V2_ADDRESS,
 } from "@/constants/addresses";
+import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import { activeFxEngineAddress } from "@/lib/fx-config";
-import { sameAddress, type TokenSymbol } from "@/lib/wizpay";
+import { sameAddress } from "@/lib/wizpay";
 import type { HistoryItem, UnifiedHistoryItem } from "@/lib/types";
+
+interface BatchHistoryLog {
+  address: Address;
+  transactionHash: Hex | null;
+  blockNumber: bigint | null;
+  args: {
+    tokenIn?: Address;
+    tokenOut?: Address;
+    totalAmountIn?: bigint;
+    totalAmountOut?: bigint;
+    totalFees?: bigint;
+    recipientCount?: bigint | number;
+    referenceId?: string;
+  };
+}
+
+interface LiquidityAddedLog {
+  transactionHash: Hex | null;
+  blockNumber: bigint | null;
+  args: {
+    token?: Address;
+    amountIn?: bigint;
+    sharesMinted?: bigint;
+  };
+}
+
+interface LiquidityRemovedLog {
+  transactionHash: Hex | null;
+  blockNumber: bigint | null;
+  args: {
+    token?: Address;
+    amountOut?: bigint;
+    sharesBurned?: bigint;
+  };
+}
 
 export function useWizPayHistory({
   activeToken,
@@ -28,7 +63,7 @@ export function useWizPayHistory({
 }) {
   const queryClient = useQueryClient();
   const publicClient = usePublicClient();
-  const { address: walletAddress } = useAccount();
+  const { walletAddress } = useActiveWalletAddress();
 
   /* ── history ── */
   const historyQuery = useQuery({
@@ -41,7 +76,7 @@ export function useWizPayHistory({
     queryFn: async (): Promise<HistoryItem[]> => {
       const currentBlock = await publicClient!.getBlockNumber();
       const CHUNK_SIZE = 9999n;
-      const chunkPromises = [];
+      const chunkPromises: Promise<BatchHistoryLog[]>[] = [];
 
       for (const contractAddr of WIZPAY_HISTORY_ADDRESSES) {
         let from = WIZPAY_HISTORY_FROM_BLOCK;
@@ -56,7 +91,7 @@ export function useWizPayHistory({
               args: { sender: walletAddress as Address },
               fromBlock: from,
               toBlock: to,
-            })
+            }) as Promise<BatchHistoryLog[]>
           );
           from = to + 1n;
         }
@@ -68,7 +103,7 @@ export function useWizPayHistory({
         new Set(
           historyLogs
             .map((log) => log.blockNumber)
-            .filter((bn): bn is bigint => Boolean(bn))
+            .filter((blockNumber): blockNumber is bigint => Boolean(blockNumber))
             .map((bn) => bn.toString())
         )
       );
@@ -84,20 +119,37 @@ export function useWizPayHistory({
       const blockTimestampMap = new Map(blockEntries);
 
       return historyLogs
-        .map((log) => ({
-          contractAddress: log.address,
-          tokenIn: log.args.tokenIn as Address,
-          tokenOut: log.args.tokenOut as Address,
-          totalAmountIn: log.args.totalAmountIn as bigint,
-          totalAmountOut: log.args.totalAmountOut as bigint,
-          totalFees: log.args.totalFees as bigint,
-          recipientCount: Number(log.args.recipientCount),
-          referenceId: log.args.referenceId as string,
-          txHash: log.transactionHash as Hex,
-          blockNumber: log.blockNumber as bigint,
-          timestampMs:
-            blockTimestampMap.get((log.blockNumber as bigint).toString()) ?? 0,
-        }))
+        .map((log): HistoryItem | null => {
+          if (
+            !log.transactionHash ||
+            !log.blockNumber ||
+            !log.args.tokenIn ||
+            !log.args.tokenOut ||
+            log.args.totalAmountIn === undefined ||
+            log.args.totalAmountOut === undefined ||
+            log.args.totalFees === undefined ||
+            log.args.recipientCount === undefined ||
+            log.args.referenceId === undefined
+          ) {
+            return null;
+          }
+
+          return {
+            contractAddress: log.address,
+            tokenIn: log.args.tokenIn,
+            tokenOut: log.args.tokenOut,
+            totalAmountIn: log.args.totalAmountIn,
+            totalAmountOut: log.args.totalAmountOut,
+            totalFees: log.args.totalFees,
+            recipientCount: Number(log.args.recipientCount),
+            referenceId: log.args.referenceId,
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+            timestampMs:
+              blockTimestampMap.get(log.blockNumber.toString()) ?? 0,
+          };
+        })
+        .filter((item): item is HistoryItem => item !== null)
         .sort((l, r) => Number(r.blockNumber - l.blockNumber));
     },
   });
@@ -116,8 +168,8 @@ export function useWizPayHistory({
     queryFn: async (): Promise<UnifiedHistoryItem[]> => {
       const currentBlock = await publicClient!.getBlockNumber();
       const CHUNK_SIZE = 9999n;
-      const addedPromises: Promise<any[]>[] = [];
-      const removedPromises: Promise<any[]>[] = [];
+      const addedPromises: Promise<LiquidityAddedLog[]>[] = [];
+      const removedPromises: Promise<LiquidityRemovedLog[]>[] = [];
 
       let from = WIZPAY_HISTORY_FROM_BLOCK;
       while (from <= currentBlock) {
@@ -130,7 +182,7 @@ export function useWizPayHistory({
             event: LIQUIDITY_ADDED_EVENT,
             fromBlock: from,
             toBlock: to,
-          })
+          }) as Promise<LiquidityAddedLog[]>
         );
         removedPromises.push(
           publicClient!.getLogs({
@@ -138,7 +190,7 @@ export function useWizPayHistory({
             event: LIQUIDITY_REMOVED_EVENT,
             fromBlock: from,
             toBlock: to,
-          })
+          }) as Promise<LiquidityRemovedLog[]>
         );
         from = to + 1n;
       }
@@ -150,9 +202,17 @@ export function useWizPayHistory({
 
       // Filter by transaction sender — LP events lack an indexed user param
       const userAddr = walletAddress!.toLowerCase();
-      const filterByTxSender = async (logs: any[]) => {
+      const filterByTxSender = async <T extends { transactionHash: Hex | null }>(
+        logs: T[]
+      ): Promise<T[]> => {
         if (logs.length === 0) return [];
-        const txHashes = Array.from(new Set(logs.map((l: any) => l.transactionHash as string)));
+        const txHashes = Array.from(
+          new Set(
+            logs
+              .map((log) => log.transactionHash)
+              .filter((hash): hash is Hex => Boolean(hash))
+          )
+        );
         const txReceipts = await Promise.all(
           txHashes.map(async (hash) => {
             const receipt = await publicClient!.getTransactionReceipt({ hash: hash as Hex });
@@ -160,7 +220,11 @@ export function useWizPayHistory({
           })
         );
         const senderMap = new Map(txReceipts);
-        return logs.filter((l: any) => senderMap.get(l.transactionHash as string) === userAddr);
+        return logs.filter(
+          (log) =>
+            Boolean(log.transactionHash) &&
+            senderMap.get(log.transactionHash as Hex) === userAddr
+        );
       };
 
       const [addedLogs, removedLogs] = await Promise.all([
@@ -172,7 +236,11 @@ export function useWizPayHistory({
       if (allLogs.length === 0) return [];
 
       const uniqueBlocks = Array.from(
-        new Set(allLogs.map((l: any) => (l.blockNumber as bigint).toString()))
+        new Set(
+          allLogs
+            .map((log) => log.blockNumber?.toString())
+            .filter((blockNumber): blockNumber is string => Boolean(blockNumber))
+        )
       );
       const blockEntries = await Promise.all(
         uniqueBlocks.map(async (bns) => {
@@ -183,25 +251,53 @@ export function useWizPayHistory({
       );
       const blockTs = new Map(blockEntries);
 
-      const added: UnifiedHistoryItem[] = addedLogs.map((log: any) => ({
-        type: "add_lp" as const,
-        txHash: log.transactionHash as Hex,
-        blockNumber: log.blockNumber as bigint,
-        timestampMs: blockTs.get((log.blockNumber as bigint).toString()) ?? 0,
-        lpToken: log.args.token as Address,
-        lpAmount: log.args.amountIn as bigint,
-        lpShares: log.args.sharesMinted as bigint,
-      }));
+      const added = addedLogs
+        .map((log): UnifiedHistoryItem | null => {
+          if (
+            !log.transactionHash ||
+            !log.blockNumber ||
+            !log.args.token ||
+            log.args.amountIn === undefined ||
+            log.args.sharesMinted === undefined
+          ) {
+            return null;
+          }
 
-      const removed: UnifiedHistoryItem[] = removedLogs.map((log: any) => ({
-        type: "remove_lp" as const,
-        txHash: log.transactionHash as Hex,
-        blockNumber: log.blockNumber as bigint,
-        timestampMs: blockTs.get((log.blockNumber as bigint).toString()) ?? 0,
-        lpToken: log.args.token as Address,
-        lpAmount: log.args.amountOut as bigint,
-        lpShares: log.args.sharesBurned as bigint,
-      }));
+          return {
+            type: "add_lp",
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+            timestampMs: blockTs.get(log.blockNumber.toString()) ?? 0,
+            lpToken: log.args.token,
+            lpAmount: log.args.amountIn,
+            lpShares: log.args.sharesMinted,
+          };
+        })
+        .filter((item): item is UnifiedHistoryItem => item !== null);
+
+      const removed = removedLogs
+        .map((log): UnifiedHistoryItem | null => {
+          if (
+            !log.transactionHash ||
+            !log.blockNumber ||
+            !log.args.token ||
+            log.args.amountOut === undefined ||
+            log.args.sharesBurned === undefined
+          ) {
+            return null;
+          }
+
+          return {
+            type: "remove_lp",
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+            timestampMs: blockTs.get(log.blockNumber.toString()) ?? 0,
+            lpToken: log.args.token,
+            lpAmount: log.args.amountOut,
+            lpShares: log.args.sharesBurned,
+          };
+        })
+        .filter((item): item is UnifiedHistoryItem => item !== null);
 
       return [...added, ...removed].sort(
         (a, b) => Number(b.blockNumber - a.blockNumber)
@@ -222,7 +318,11 @@ export function useWizPayHistory({
     },
   });
 
-  const history = historyQuery.data ?? [];
+  const history = useMemo(() => historyQuery.data ?? [], [historyQuery.data]);
+  const lpHistory = useMemo(
+    () => lpHistoryQuery.data ?? [],
+    [lpHistoryQuery.data]
+  );
 
   // Build unified history combining payroll + LP events
   const unifiedHistory = useMemo<UnifiedHistoryItem[]>(() => {
@@ -239,11 +339,10 @@ export function useWizPayHistory({
       recipientCount: item.recipientCount,
       referenceId: item.referenceId,
     }));
-    const lpItems = lpHistoryQuery.data ?? [];
-    return [...payrollItems, ...lpItems].sort(
+    return [...payrollItems, ...lpHistory].sort(
       (a, b) => Number(b.blockNumber - a.blockNumber)
     );
-  }, [history, lpHistoryQuery.data]);
+  }, [history, lpHistory]);
 
   const totalRouted = useMemo(
     () =>

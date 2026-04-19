@@ -60,6 +60,11 @@ export interface UnifiedHistoryItem {
   lpShares?: bigint;
 }
 
+export interface TransactionActionResult {
+  ok: boolean;
+  hash: string | null;
+}
+
 /* ── The shape returned by useWizPay() ── */
 export interface WizPayState {
   /* token selection */
@@ -97,6 +102,7 @@ export interface WizPayState {
   /* diagnostics */
   rowDiagnostics: (string | null)[];
   hasRouteIssue: boolean;
+  approvalAmount: bigint;
   needsApproval: boolean;
   insufficientBalance: boolean;
 
@@ -110,7 +116,7 @@ export interface WizPayState {
   approvalState: StepState;
   submitState: StepState;
   approveTxHash: Hex | null;
-  submitTxHash: Hex | null;
+  submitTxHash: string | null;
   estimatedGas: bigint | null;
   statusMessage: string | null;
   errorMessage: string | null;
@@ -128,8 +134,8 @@ export interface WizPayState {
   setSessionTotalDistributed: (arg: Record<TokenSymbol, bigint> | ((prev: Record<TokenSymbol, bigint>) => Record<TokenSymbol, bigint>)) => void;
 
   /* actions */
-  handleApprove: () => Promise<void>;
-  handleSubmit: () => Promise<void>;
+  handleApprove: () => Promise<TransactionActionResult>;
+  handleSubmit: () => Promise<TransactionActionResult>;
   resetComposer: () => void;
   loadNextBatch: () => void;
   dismissSuccessModal: () => void;
@@ -137,9 +143,18 @@ export interface WizPayState {
   setErrorMessage: (msg: string | null) => void;
   importRecipients: (rows: RecipientDraft[]) => void;
 
+  /* smart batch */
+  smartBatchAvailable: boolean;
+  smartBatchRunning: boolean;
+  smartBatchReason: string | null;
+  smartBatchButtonText: string | null;
+  smartBatchHelperText: string | null;
+  smartBatchSubmissionHashes: string[];
+  handleSmartBatchSubmit: () => Promise<void>;
+
   /* clipboard */
-  copiedHash: Hex | null;
-  copyHash: (hash: Hex | null) => Promise<void>;
+  copiedHash: string | null;
+  copyHash: (hash: string | null) => Promise<void>;
 
   /* derived text */
   primaryActionText: string;

@@ -1,8 +1,8 @@
 "use client";
 
-import { usePrivy } from "@privy-io/react-auth";
 import { Wallet, Mail, Globe, Shield, Zap, ArrowRightLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
 
 const features = [
   { icon: Zap, label: "Multi-Token" },
@@ -11,7 +11,7 @@ const features = [
 ];
 
 export function ConnectWalletCard() {
-  const { login } = usePrivy();
+  const { login, ready } = useCircleWallet();
 
   return (
     <Card className="glass-card animate-scale-in overflow-hidden border-border/40 w-full max-w-lg mx-auto relative">
@@ -34,7 +34,7 @@ export function ConnectWalletCard() {
             Welcome to WizPay
           </h1>
           <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-            Connect with Google, X, Email, or your Web3 wallet to access the payroll dashboard.
+            Sign in with your Circle wallet using Google or email OTP to access the payroll dashboard.
           </p>
         </div>
 
@@ -53,12 +53,13 @@ export function ConnectWalletCard() {
 
         {/* Login CTA */}
         <button
-          id="privy-connect-btn"
+          id="circle-connect-btn"
           onClick={login}
+          disabled={!ready}
           className="glow-btn group relative inline-flex items-center gap-2.5 rounded-2xl bg-gradient-to-r from-primary via-violet-500 to-primary px-8 py-4 text-base font-bold text-primary-foreground shadow-xl shadow-primary/25 transition-all hover:shadow-2xl hover:shadow-primary/40 hover:brightness-110 active:scale-[0.97] w-full sm:w-auto"
         >
           <Wallet className="h-5 w-5 transition-transform group-hover:scale-110 group-hover:rotate-[-6deg]" />
-          Sign In to WizPay
+          {ready ? "Sign In with Circle" : "Loading Circle Wallet..."}
         </button>
 
         {/* Login method hints */}
@@ -68,11 +69,11 @@ export function ConnectWalletCard() {
           </span>
           <span className="h-3 w-px bg-border/60" />
           <span className="flex items-center gap-1.5">
-            <Mail className="h-3.5 w-3.5" /> Email
+            <Mail className="h-3.5 w-3.5" /> Email OTP
           </span>
           <span className="h-3 w-px bg-border/60" />
           <span className="flex items-center gap-1.5">
-            <Wallet className="h-3.5 w-3.5" /> Wallet
+            <Wallet className="h-3.5 w-3.5" /> Circle W3S
           </span>
         </div>
       </CardContent>

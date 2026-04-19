@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRightLeft, History, Coins, LayoutDashboard } from "lucide-react";
+import { ArrowRightLeft, History, Coins, LayoutDashboard, Repeat, Route } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { NavTab } from "./BottomNav";
@@ -60,6 +60,26 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
             <LayoutDashboard className="h-4 w-4 transition-transform duration-250 group-hover:scale-105" />
           </div>
           Overview
+        </Link>
+
+        <Link
+          href="/swap"
+          className="group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-250 text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+        >
+          <div className="flex items-center justify-center rounded-lg p-1.5 transition-all duration-250 text-muted-foreground group-hover:bg-muted/60 group-hover:text-foreground">
+            <Repeat className="h-4 w-4 transition-transform duration-250 group-hover:scale-105" />
+          </div>
+          Swap Kit
+        </Link>
+
+        <Link
+          href="/bridge"
+          className="group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-250 text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+        >
+          <div className="flex items-center justify-center rounded-lg p-1.5 transition-all duration-250 text-muted-foreground group-hover:bg-muted/60 group-hover:text-foreground">
+            <Route className="h-4 w-4 transition-transform duration-250 group-hover:scale-105" />
+          </div>
+          Bridge
         </Link>
 
         {navItems.map(({ id, label, icon: Icon }) => {

@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRightLeft, LayoutDashboard } from "lucide-react";
+import { ArrowRightLeft, Coins, LayoutDashboard, Repeat, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabs = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/", label: "Send", icon: ArrowRightLeft },
+  { href: "/liquidity", label: "LP", icon: Coins },
+  { href: "/swap", label: "Swap", icon: Repeat },
+  { href: "/bridge", label: "Bridge", icon: Route },
 ];
 
 export function DashboardBottomNav() {

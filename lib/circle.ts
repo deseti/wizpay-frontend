@@ -33,6 +33,34 @@ function getConfig() {
   return { apiKey, baseUrl };
 }
 
+async function probeGeneralCircleApiAccess(
+  apiKey: string,
+  baseUrl: string
+): Promise<"valid" | "invalid" | "unknown"> {
+  try {
+    const response = await fetch(`${baseUrl}/v1/w3s/config/entity/publicKey`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: AbortSignal.timeout(5_000),
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      return "valid";
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return "invalid";
+    }
+
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 // ─── Error Types ────────────────────────────────────────────────────
 
 export class CircleApiError extends Error {
@@ -65,18 +93,12 @@ async function circleFetch<T = unknown>(
 
   const url = `${baseUrl}${path}`;
 
-  // Auth mask logic
-  const authType = apiKey.startsWith("TEST_API_KEY") ? "TEST_API_KEY" : (apiKey.startsWith("LIVE_API_KEY") ? "LIVE_API_KEY" : "UNKNOWN_PREFIX");
-  const authMasked = authType !== "UNKNOWN_PREFIX" && apiKey.includes(":") 
-    ? `${authType}:***:${apiKey.split(":").pop()?.substring(0, 4)}...`
-    : `${apiKey.substring(0, 8)}...`;
-
-  // Deep debugging logs
-  console.log(`[Circle Debug] → ${options.method || "GET"} ${url}`);
-  console.log(`[Circle Debug] Auth Prefix Format: Bearer ${authMasked}`);
-  if (options.body) {
-    console.log(`[Circle Debug] Request Body:`, typeof options.body === 'string' ? JSON.parse(options.body) : options.body);
-  }
+  const authType = apiKey.startsWith("TEST_API_KEY")
+    ? "TEST_API_KEY"
+    : apiKey.startsWith("LIVE_API_KEY")
+      ? "LIVE_API_KEY"
+      : "UNKNOWN_PREFIX";
+  const hasStandardApiKeyPrefix = authType !== "UNKNOWN_PREFIX";
 
   let res: Response;
   try {
@@ -104,8 +126,6 @@ async function circleFetch<T = unknown>(
     );
   }
 
-  console.log(`[Circle] ← ${res.status} ${res.statusText}`);
-
   if (!res.ok) {
     let body: unknown;
     try {
@@ -114,9 +134,7 @@ async function circleFetch<T = unknown>(
       body = await res.text().catch(() => null);
     }
 
-    console.error(`[Circle] Error body:`, JSON.stringify(body, null, 2));
-
-    const message =
+    const upstreamMessage =
       typeof body === "object" && body !== null && "message" in body
         ? String((body as Record<string, unknown>).message)
         : `Circle API returned ${res.status}`;
@@ -125,6 +143,22 @@ async function circleFetch<T = unknown>(
       typeof body === "object" && body !== null && "code" in body
         ? String((body as Record<string, unknown>).code)
         : undefined;
+
+    const generalAccessProbe =
+      res.status === 401 && path.startsWith("/v1/exchange/stablefx") && hasStandardApiKeyPrefix
+        ? await probeGeneralCircleApiAccess(apiKey, baseUrl)
+        : "unknown";
+
+    const message =
+      res.status === 401
+        ? !hasStandardApiKeyPrefix
+          ? "CIRCLE_API_KEY does not use a standard Circle REST API key prefix. Expected TEST_API_KEY or LIVE_API_KEY for StableFX requests."
+          : generalAccessProbe === "valid"
+            ? "Circle accepted this API key for general APIs, but the account or key is not enabled for StableFX yet. Request StableFX access in Circle Developer Console."
+            : "Circle rejected the configured StableFX API key. Replace CIRCLE_API_KEY with a StableFX-enabled key from Circle Developer Console."
+        : res.status === 403
+          ? "Circle accepted the API key but this account is not permitted to use StableFX yet. Request StableFX access in Circle Developer Console."
+          : upstreamMessage;
 
     throw new CircleApiError(message, res.status, code, body);
   }

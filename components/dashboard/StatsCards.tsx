@@ -18,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { STABLE_FX_ADAPTER_V2_ADDRESS } from "@/constants/addresses";
 import { fxProviderLabel, activeFxEngineAddress, isStableFxMode } from "@/lib/fx-config";
 import {
   formatCompactAddress,

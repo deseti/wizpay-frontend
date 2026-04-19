@@ -1,22 +1,23 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { usePrivy } from "@privy-io/react-auth";
-import { useAccount } from "wagmi";
-import { ArrowRightLeft, LogOut, Key, ChevronDown, User, Copy, Check, Wifi } from "lucide-react";
+import { ArrowRightLeft, LogOut, ChevronDown, User, Copy, Check, Wifi, Mail } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useSmartWalletAddress } from "@/hooks/useSmartWalletAddress";
+import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
 
 function truncateAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
 export function DashboardHeader() {
-  const { login, logout, authenticated, ready, user, exportWallet } =
-    usePrivy();
-  const { address } = useAccount();
+  const { login, logout, authenticated, ready, loginMethodLabel, userEmail } =
+    useCircleWallet();
+  const { smartWalletAddress, isLoadingSmartWalletAddress } =
+    useSmartWalletAddress();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState<"wallet" | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -31,23 +32,20 @@ export function DashboardHeader() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Determine login method label
-  const loginMethod = user?.linkedAccounts?.[0]?.type;
-  const loginLabel =
-    loginMethod === "google_oauth"
-      ? "Google"
-      : loginMethod === "twitter_oauth"
-        ? "X"
-        : loginMethod === "email"
-          ? "Email"
-          : loginMethod === "wallet"
-            ? "Wallet"
-            : "Connected";
-
-  // Check if user has an embedded wallet (from Web2 login)
-  const hasEmbeddedWallet = user?.linkedAccounts?.some(
-    (a) => a.type === "wallet" && (a as any).walletClientType === "privy"
-  );
+  async function copyAddress(address: string) {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedAddress("wallet");
+      toast({
+        title: "Circle wallet address copied",
+        description:
+          "Use this address for Arc balances, transaction history, and upcoming Circle challenge-based actions.",
+      });
+      window.setTimeout(() => setCopiedAddress(null), 2000);
+    } catch (error) {
+      console.error(error);
+    }
+  }
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/40 bg-background/60 backdrop-blur-2xl">
@@ -98,7 +96,7 @@ export function DashboardHeader() {
             <div className="h-9 w-24 animate-pulse rounded-xl bg-muted/30" />
           ) : !authenticated ? (
             <button
-              id="privy-sign-in-btn"
+              id="circle-sign-in-btn"
               onClick={login}
               className="glow-btn group relative flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary to-violet-500 px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:shadow-xl hover:shadow-primary/30 hover:brightness-110 active:scale-[0.97]"
             >
@@ -108,27 +106,19 @@ export function DashboardHeader() {
           ) : (
             <div className="flex items-center gap-1.5 bg-card/50 backdrop-blur-md p-1 rounded-2xl border border-border/40 shadow-lg shadow-black/10">
               {/* Universal Header Copy Address Pill */}
-              {address && (
+              {isLoadingSmartWalletAddress ? (
+                <div className="hidden h-9 w-28 rounded-xl bg-muted/25 animate-pulse sm:block" />
+              ) : null}
+
+              {smartWalletAddress && (
                 <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(address);
-                      setCopied(true);
-                      toast({
-                        title: "Address copied to clipboard!",
-                        description: "Paste this into the Circle Faucet.",
-                      });
-                      setTimeout(() => setCopied(false), 2000);
-                    } catch (e) {
-                      console.error(e);
-                    }
-                  }}
+                  onClick={() => void copyAddress(smartWalletAddress)}
                   className="flex items-center gap-1.5 rounded-xl px-2.5 py-2 font-mono text-[11px] sm:text-xs text-foreground/75 hover:bg-primary/10 hover:text-primary transition-all active:scale-95"
-                  title="Copy Wallet Address"
+                  title="Copy Circle Wallet Address"
                 >
-                  <span className="hidden min-[400px]:inline">{truncateAddress(address)}</span>
-                  <span className="inline min-[400px]:hidden">{address.slice(0,4)}…{address.slice(-4)}</span>
-                  {copied ? (
+                  <span className="hidden min-[400px]:inline">{truncateAddress(smartWalletAddress)}</span>
+                  <span className="inline min-[400px]:hidden">{smartWalletAddress.slice(0,4)}…{smartWalletAddress.slice(-4)}</span>
+                  {copiedAddress === "wallet" ? (
                     <Check className="h-3 w-3 text-emerald-400" />
                   ) : (
                     <Copy className="h-3 w-3 text-muted-foreground" />
@@ -139,12 +129,12 @@ export function DashboardHeader() {
               {/* Profile Dropdown */}
               <div className="relative" ref={menuRef}>
                 <button
-                  id="privy-account-menu-btn"
+                  id="circle-account-menu-btn"
                   onClick={() => setMenuOpen((prev) => !prev)}
                   className="flex h-9 w-9 sm:h-auto sm:w-auto items-center justify-center sm:px-3 sm:py-2 gap-1.5 rounded-xl bg-background/80 hover:bg-primary/10 transition-all border border-transparent hover:border-primary/20 active:scale-95"
                 >
                   <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-primary/25 to-violet-500/20 text-primary text-[11px] font-bold ring-1 ring-primary/20">
-                    {loginLabel.charAt(0)}
+                    {loginMethodLabel.charAt(0)}
                   </span>
                   <ChevronDown
                     className={`hidden sm:block h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${menuOpen ? "rotate-180" : ""}`}
@@ -157,22 +147,38 @@ export function DashboardHeader() {
                       <p className="text-xs text-muted-foreground">
                         Logged in via{" "}
                         <span className="text-foreground font-semibold">
-                          {loginLabel}
+                          {loginMethodLabel}
                         </span>
                       </p>
+                      {userEmail ? (
+                        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground/70">
+                          <Mail className="h-3.5 w-3.5" />
+                          {userEmail}
+                        </p>
+                      ) : null}
                     </div>
 
-                    {hasEmbeddedWallet && (
-                      <button
-                        onClick={() => {
-                          exportWallet();
-                          setMenuOpen(false);
-                        }}
-                        className="flex w-full items-center gap-3 px-4 py-3 text-sm text-foreground/90 transition-all hover:bg-primary/10 hover:text-primary"
-                      >
-                        <Key className="h-4 w-4 text-amber-400" />
-                        Export Private Key
-                      </button>
+                    {smartWalletAddress && (
+                      <div className="border-b border-border/30 px-3 py-3 space-y-2">
+                        <button
+                          onClick={() => void copyAddress(smartWalletAddress)}
+                          className="flex w-full items-center justify-between rounded-xl border border-border/30 bg-background/40 px-3 py-2 text-left transition-all hover:border-primary/20 hover:bg-primary/10"
+                        >
+                          <div>
+                            <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/60">
+                              Circle Wallet
+                            </p>
+                            <p className="font-mono text-xs text-foreground/80">
+                              {truncateAddress(smartWalletAddress)}
+                            </p>
+                          </div>
+                          {copiedAddress === "wallet" ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                          )}
+                        </button>
+                      </div>
                     )}
 
                     <button

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRightLeft, History, Coins, LayoutDashboard } from "lucide-react";
+import { ArrowRightLeft, Coins, LayoutDashboard, Repeat, Route } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { FaucetButton } from "./FaucetButton";
@@ -10,6 +10,9 @@ import { FaucetButton } from "./FaucetButton";
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/", label: "Payroll / Send", icon: ArrowRightLeft },
+  { href: "/liquidity", label: "LP Pool", icon: Coins },
+  { href: "/swap", label: "Swap Kit", icon: Repeat },
+  { href: "/bridge", label: "Bridge", icon: Route },
 ];
 
 export function DashboardSidebar() {

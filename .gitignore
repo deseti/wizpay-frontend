@@ -33,6 +33,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# Circle local recovery artifacts
+/output/
+/recovery_file_*.dat
+
 # vercel
 .vercel
 

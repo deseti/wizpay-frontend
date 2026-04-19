@@ -25,14 +25,18 @@ function txLink(hash: Hex) {
   return `${EXPLORER_BASE_URL}/tx/${hash}`;
 }
 
+function isExplorerHash(value: string): value is Hex {
+  return /^0x[a-fA-F0-9]{64}$/.test(value);
+}
+
 interface StatusBannersProps {
   statusMessage: string | null;
   errorMessage: string | null;
   approveTxHash: Hex | null;
-  submitTxHash: Hex | null;
+  submitTxHash: string | null;
   submitState: StepState;
-  copiedHash: Hex | null;
-  copyHash: (hash: Hex | null) => Promise<void>;
+  copiedHash: string | null;
+  copyHash: (hash: string | null) => Promise<void>;
 }
 
 export function StatusBanners({
@@ -83,7 +87,7 @@ export function StatusBanners({
           <CardHeader>
             <CardTitle>Latest Transactions</CardTitle>
             <CardDescription>
-              Approval and batch hashes linked to ArcScan.
+              Approval hashes and the latest settlement reference.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -128,11 +132,15 @@ export function StatusBanners({
               <div className="flex flex-col gap-2 rounded-xl border border-border/40 bg-background/35 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold">Batch Submit</p>
+                    <p className="text-sm font-semibold">
+                      {isExplorerHash(submitTxHash)
+                        ? "Batch Submit"
+                        : "Circle Reference"}
+                    </p>
                     {submitState === "confirmed" ? (
                       <Badge className="gap-1 bg-emerald-500/15 text-emerald-300 border-emerald-500/25">
                         <CheckCircle2 className="h-3 w-3" />
-                        Confirmed
+                        {isExplorerHash(submitTxHash) ? "Confirmed" : "Settled"}
                       </Badge>
                     ) : null}
                   </div>
@@ -150,21 +158,23 @@ export function StatusBanners({
                     <Copy className="h-3.5 w-3.5" />
                     {copiedHash === submitTxHash ? "Copied" : "Copy"}
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    asChild
-                    className="gap-1 border-border/40 hover:border-primary/20"
-                  >
-                    <a
-                      href={txLink(submitTxHash)}
-                      target="_blank"
-                      rel="noreferrer"
+                  {isExplorerHash(submitTxHash) ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      asChild
+                      className="gap-1 border-border/40 hover:border-primary/20"
                     >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      ArcScan
-                    </a>
-                  </Button>
+                      <a
+                        href={txLink(submitTxHash)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        ArcScan
+                      </a>
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             ) : null}

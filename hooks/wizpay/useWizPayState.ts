@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, useEffect } from "react";
 import { type Hex } from "viem";
 import {
   createRecipient,
+  MAX_REFERENCE_ID_LENGTH,
   parseAmountToUnits,
   type RecipientDraft,
   type TokenSymbol,
@@ -36,10 +37,10 @@ export function useWizPayState() {
   const [approvalState, setApprovalState] = useState<StepState>("idle");
   const [submitState, setSubmitState] = useState<StepState>("idle");
   const [approveTxHash, setApproveTxHash] = useState<Hex | null>(null);
-  const [submitTxHash, setSubmitTxHash] = useState<Hex | null>(null);
+  const [submitTxHash, setSubmitTxHash] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [copiedHash, setCopiedHash] = useState<Hex | null>(null);
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   const clearFieldError = useCallback((key: string) => {
     setErrors((current) => {
@@ -150,9 +151,12 @@ export function useWizPayState() {
 
   const validate = useCallback(() => {
     const nextErrors: Record<string, string> = {};
+    const trimmedReferenceId = referenceId.trim();
 
-    if (!referenceId.trim()) {
+    if (!trimmedReferenceId) {
       nextErrors.referenceId = "Reference ID is required";
+    } else if (trimmedReferenceId.length > MAX_REFERENCE_ID_LENGTH) {
+      nextErrors.referenceId = `Reference ID must be ${MAX_REFERENCE_ID_LENGTH} characters or less`;
     }
 
     preparedRecipients.forEach((r) => {
@@ -195,7 +199,7 @@ export function useWizPayState() {
     resetComposer();
   }, [resetComposer]);
 
-  const copyHash = useCallback(async (hash: Hex | null) => {
+  const copyHash = useCallback(async (hash: string | null) => {
     if (!hash) return;
     try {
       await navigator.clipboard.writeText(hash);

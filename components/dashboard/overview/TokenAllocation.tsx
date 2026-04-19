@@ -7,6 +7,11 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
+import type { TooltipContentProps } from "recharts/types/component/Tooltip";
+import type {
+  NameType,
+  ValueType,
+} from "recharts/types/component/DefaultTooltipContent";
 
 import {
   Card,
@@ -22,9 +27,14 @@ interface TokenAllocationProps {
   isLoading: boolean;
 }
 
-function CustomTooltip({ active, payload }: any) {
+function CustomTooltip({
+  active,
+  payload,
+}: TooltipContentProps<ValueType, NameType>) {
   if (!active || !payload?.length) return null;
-  const item = payload[0].payload as TokenAllocationItem;
+
+  const item = payload[0]?.payload as TokenAllocationItem | undefined;
+  if (!item) return null;
 
   return (
     <div className="rounded-xl border border-border/40 bg-card/95 px-3 py-2 shadow-2xl shadow-black/40 backdrop-blur-2xl">
@@ -96,7 +106,7 @@ export function TokenAllocation({
                       />
                     ))}
                   </Pie>
-                  <Tooltip content={<CustomTooltip />} />
+                  <Tooltip content={(props) => <CustomTooltip {...props} />} />
                 </PieChart>
               </ResponsiveContainer>
               {/* Center label */}

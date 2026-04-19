@@ -1,6 +1,6 @@
 "use client";
 
-import { usePrivy } from "@privy-io/react-auth";
+import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
 
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { ConnectWalletCard } from "@/components/dashboard/ConnectWalletCard";
@@ -16,7 +16,7 @@ import { usePayrollData } from "@/hooks/usePayrollData";
 import { getPayrollCycleLabel } from "@/lib/dashboard-utils";
 
 export default function PayrollOverviewPage() {
-  const { authenticated, ready } = usePrivy();
+  const { authenticated, ready } = useCircleWallet();
 
   const {
     totalPayroll,

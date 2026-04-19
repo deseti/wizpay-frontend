@@ -1,7 +1,8 @@
 "use client";
 
-import { useAccount, useReadContracts } from "wagmi";
+import { useReadContracts } from "wagmi";
 import { ERC20_ABI } from "@/constants/erc20";
+import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import { TOKEN_OPTIONS, type TokenSymbol } from "@/lib/wizpay";
 
 /**
@@ -9,19 +10,19 @@ import { TOKEN_OPTIONS, type TokenSymbol } from "@/lib/wizpay";
  * for the connected wallet via multicall.
  */
 export function useTokenBalances() {
-  const { address } = useAccount();
+  const { walletAddress } = useActiveWalletAddress();
 
   const contracts = TOKEN_OPTIONS.map((token) => ({
     address: token.address,
     abi: ERC20_ABI,
     functionName: "balanceOf" as const,
-    args: address ? [address] : undefined,
+    args: walletAddress ? [walletAddress] : undefined,
   }));
 
   const { data, isLoading, isError, error, refetch } = useReadContracts({
-    contracts: address ? contracts : [],
+    contracts: walletAddress ? contracts : [],
     query: {
-      enabled: Boolean(address),
+      enabled: Boolean(walletAddress),
       refetchInterval: 15_000,
     },
   });

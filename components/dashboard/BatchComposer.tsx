@@ -39,8 +39,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { WIZPAY_ADDRESS } from "@/constants/addresses";
-import type { PreparedRecipient, QuoteSummary, StepState } from "@/lib/types";
+import type {
+  PreparedRecipient,
+  QuoteSummary,
+} from "@/lib/types";
+import {
+  activeFxEngineAddress,
+  fxProviderLabel,
+  isStableFxMode,
+  permit2Address,
+} from "@/lib/fx-config";
 import {
   formatCompactAddress,
   formatTokenAmount,
@@ -66,24 +74,21 @@ interface BatchComposerProps {
   rowDiagnostics: (string | null)[];
   estimatedGas: bigint | null;
   isBusy: boolean;
-  needsApproval: boolean;
   insufficientBalance: boolean;
-  approvalState: StepState;
-  submitState: StepState;
-  approvalText: string;
-  primaryActionText: string;
-  approvalAmount: bigint;
   updateRecipient: (id: string, field: keyof Omit<RecipientDraft, "id">, value: string) => void;
   addRecipient: () => void;
   removeRecipient: (id: string) => void;
-  handleApprove: () => Promise<void>;
-  handleSubmit: () => Promise<void>;
   resetComposer: () => void;
   setErrorMessage: (msg: string | null) => void;
   importRecipients: (rows: RecipientDraft[]) => void;
   totalBatches: number;
   currentBatchNumber: number;
-  loadNextBatch: () => void;
+  smartBatchAvailable?: boolean;
+  smartBatchRunning?: boolean;
+  smartBatchReason?: string | null;
+  smartBatchButtonText?: string | null;
+  smartBatchHelperText?: string | null;
+  handleSmartBatchSubmit?: () => Promise<void>;
 }
 
 export function BatchComposer({
@@ -101,28 +106,26 @@ export function BatchComposer({
   rowDiagnostics,
   estimatedGas,
   isBusy,
-  needsApproval,
   insufficientBalance,
-  approvalState,
-  submitState,
-  approvalText,
-  primaryActionText,
-  approvalAmount,
   updateRecipient,
   addRecipient,
   removeRecipient,
-  handleApprove,
-  handleSubmit,
   resetComposer,
   setErrorMessage,
   importRecipients,
   totalBatches,
   currentBatchNumber,
-  loadNextBatch,
+  smartBatchAvailable = false,
+  smartBatchRunning = false,
+  smartBatchReason,
+  smartBatchButtonText,
+  smartBatchHelperText,
+  handleSmartBatchSubmit,
 }: BatchComposerProps) {
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [csvLoading, setCsvLoading] = useState(false);
   const { toast } = useToast();
+  const canSend = smartBatchAvailable && Boolean(handleSmartBatchSubmit);
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -263,10 +266,15 @@ export function BatchComposer({
       <CardHeader className="soft-divider border-b border-border/30">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <CardTitle className="text-lg">Cross-Token Batch Payroll</CardTitle>
+            <CardTitle className="text-lg">
+              {isStableFxMode
+                ? "Official Circle StableFX Payroll"
+                : "StableFX Adapter V2 Payroll"}
+            </CardTitle>
             <CardDescription>
-              Send one input token, let each recipient choose USDC or EURC, and
-              block submission if simulation predicts a revert.
+              {isStableFxMode
+                ? "Circle quote, Permit2 signature, and FxEscrow settlement for cross-currency rows. Same-token rows use direct Circle transfers on Arc."
+                : "Send one input token, let each recipient choose USDC or EURC, and route cross-currency rows through the on-chain StableFX adapter pool."}
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -276,8 +284,13 @@ export function BatchComposer({
               </Badge>
             )}
             <Badge variant="outline" className="font-mono text-[11px] border-primary/20 text-primary/70 bg-primary/5">
-              {formatCompactAddress(WIZPAY_ADDRESS)}
+              {`${fxProviderLabel}: ${formatCompactAddress(activeFxEngineAddress)}`}
             </Badge>
+            {isStableFxMode ? (
+              <Badge variant="outline" className="font-mono text-[11px] border-sky-500/20 text-sky-300/80 bg-sky-500/5">
+                Permit2: {formatCompactAddress(permit2Address)}
+              </Badge>
+            ) : null}
             <Badge variant="outline" className="border-emerald-500/20 text-emerald-300/80 bg-emerald-500/5">
               {validRecipientCount}/{recipients.length} valid
             </Badge>
@@ -706,11 +719,20 @@ export function BatchComposer({
             {activeToken.symbol}
           </p>
           <p className="text-muted-foreground/70 text-xs">
-            Est. gas:{" "}
-            {estimatedGas
-              ? estimatedGas.toLocaleString("en-US")
-              : "Run simulation"}
+            {isStableFxMode
+              ? "Settlement path: Circle StableFX RFQ + Permit2 + FxEscrow"
+              : `Settlement path: WizPay + ${fxProviderLabel} LP at ${formatCompactAddress(activeFxEngineAddress)}${estimatedGas ? ` · Est. gas: ${estimatedGas.toLocaleString("en-US")}` : ""}`}
           </p>
+          {smartBatchAvailable ? (
+            <p className="text-xs text-muted-foreground/70">
+              {smartBatchHelperText ??
+                "Click Send once to run approval and every required payroll batch automatically. Circle may still ask you to confirm each transaction."}
+            </p>
+          ) : smartBatchReason ? (
+            <p className="text-xs text-amber-300/80">
+              {smartBatchReason}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -722,54 +744,25 @@ export function BatchComposer({
           >
             Reset
           </Button>
-
-          {submitState === "confirmed" && currentBatchNumber < totalBatches ? (
-            <Button
-              onClick={loadNextBatch}
-              className="glow-btn h-11 gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-primary-foreground hover:brightness-110 shadow-lg shadow-emerald-500/20 transition-all active:scale-[0.97]"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Process Next Batch
-            </Button>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                onClick={handleApprove}
-                disabled={
-                  isBusy ||
-                  insufficientBalance ||
-                  approvalAmount === 0n ||
-                  !needsApproval
-                }
-                className="h-11 gap-2 border-primary/30 bg-primary/8 text-primary hover:bg-primary/15 hover:border-primary/40 transition-all"
-              >
-                {approvalState === "signing" ||
-                approvalState === "confirming" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <ShieldCheck className="h-4 w-4" />
-                )}
-                {approvalText}
-              </Button>
-              <Button
-                onClick={handleSubmit}
-                disabled={isBusy || needsApproval || insufficientBalance}
-                className="glow-btn h-11 gap-2 bg-gradient-to-r from-primary to-violet-500 text-primary-foreground hover:brightness-110 shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 transition-all active:scale-[0.97]"
-              >
-                {submitState === "simulating" ||
-                submitState === "wallet" ||
-                submitState === "confirming" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : submitState === "confirmed" ? (
-                  <CheckCircle2 className="h-4 w-4" />
-                ) : (
-                  <Rocket className="h-4 w-4" />
-                )}
-                {primaryActionText}
-              </Button>
-            </>
-          )}
+          <Button
+            onClick={() => {
+              void handleSmartBatchSubmit?.();
+            }}
+            disabled={
+              isBusy ||
+              smartBatchRunning ||
+              insufficientBalance ||
+              !canSend
+            }
+            className="h-11 gap-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:brightness-110 shadow-lg shadow-cyan-500/20 transition-all active:scale-[0.97]"
+          >
+            {smartBatchRunning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Rocket className="h-4 w-4" />
+            )}
+            {smartBatchButtonText ?? "Send"}
+          </Button>
         </div>
       </CardFooter>
     </Card>

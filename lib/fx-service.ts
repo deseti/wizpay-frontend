@@ -54,7 +54,7 @@ export async function getQuote(
  * Execute an FX trade using a previously obtained quote.
  * Only available in StableFX mode.
  *
- * TODO: The full Permit2 flow requires:
+ * Permit2 execution flow:
  * 1. Frontend receives typedData from the quote response
  * 2. User signs typedData via eth_signTypedData_v4 (Privy or MetaMask)
  * 3. The hex signature is passed here

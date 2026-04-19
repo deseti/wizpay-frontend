@@ -32,6 +32,9 @@ export function PreflightPanel({
 }: PreflightPanelProps) {
   const allowanceOk = currentAllowance >= approvalAmount && approvalAmount > 0n;
   const routeHealthy = !rowDiagnostics.some(Boolean);
+  const uniqueDiagnostics = Array.from(
+    new Set(rowDiagnostics.filter((diagnostic): diagnostic is string => Boolean(diagnostic)))
+  ).slice(0, 3);
 
   return (
     <Card className="glass-card border-border/40">
@@ -77,11 +80,8 @@ export function PreflightPanel({
           </div>
           <div className="mt-2 space-y-2">
             {rowDiagnostics.some(Boolean) ? (
-              rowDiagnostics
-                .filter((d): d is string => Boolean(d))
-                .slice(0, 3)
-                .map((diagnostic) => (
-                  <p key={diagnostic} className="text-xs text-amber-300/80">
+              uniqueDiagnostics.map((diagnostic, index) => (
+                  <p key={`${index}-${diagnostic}`} className="text-xs text-amber-300/80">
                     {diagnostic}
                   </p>
                 ))

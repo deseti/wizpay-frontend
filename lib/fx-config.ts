@@ -6,7 +6,7 @@
  *
  * Set via environment variable:
  *   NEXT_PUBLIC_USE_REAL_STABLEFX=true   → Circle StableFX mode
- *   NEXT_PUBLIC_USE_REAL_STABLEFX=false  → Legacy adapter mode (default)
+ *   any other value / omitted            → Legacy adapter mode (default)
  */
 
 import {
@@ -19,7 +19,7 @@ export type FxMode = "legacy" | "stablefx";
 
 /**
  * Active FX mode, derived from the environment variable.
- * Defaults to "legacy" if not set or set to any value other than "true".
+ * Defaults to the on-chain adapter flow unless Circle StableFX is explicitly enabled.
  */
 export const fxMode: FxMode =
   process.env.NEXT_PUBLIC_USE_REAL_STABLEFX === "true"

@@ -4,7 +4,7 @@ import { Geist_Mono, Manrope } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
-/** Privy requires client-side initialization — skip static prerendering */
+/** Circle Web SDK requires client-side initialization — skip static prerendering */
 export const dynamic = "force-dynamic";
 
 const manrope = Manrope({

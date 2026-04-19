@@ -10,7 +10,6 @@ import {
   Info,
   MessageCircle,
   Sparkles,
-  Vault,
 } from "lucide-react";
 import { usePublicClient } from "wagmi";
 
@@ -18,7 +17,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -30,10 +28,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 
 import { useLiquidity } from "@/lib/use-liquidity";
 import {
-  formatTokenAmount,
-  formatCompactAddress,
   EXPLORER_BASE_URL,
   TOKEN_OPTIONS,
+  formatCompactAddress,
+  formatTokenAmount,
+  getExplorerTxUrl,
+  isTransactionHash,
   type TokenSymbol,
 } from "@/lib/wizpay";
 import { USDC_ADDRESS, EURC_ADDRESS } from "@/constants/addresses";
@@ -44,6 +44,22 @@ const TOKEN_ADDRESSES: Record<TokenSymbol, `0x${string}`> = {
 };
 
 type LPStep = "idle" | "approving" | "executing" | "success" | "error";
+
+function getErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const shortMessage = Reflect.get(error, "shortMessage");
+    if (typeof shortMessage === "string") {
+      return shortMessage;
+    }
+
+    const message = Reflect.get(error, "message");
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return "Transaction rejected or failed.";
+}
 
 export function LiquidityScreen() {
   const [selectedToken, setSelectedToken] = useState<TokenSymbol>("USDC");
@@ -76,7 +92,7 @@ export function LiquidityScreen() {
   const decimals = tokenRecord?.decimals || 6;
   const amountBn = amountStr ? parseUnits(amountStr, activeTab === "deposit" ? decimals : 6) : 0n;
   const needsDepositApproval = activeTab === "deposit" && amountBn > allowance;
-  const needsWithdrawApproval = activeTab === "withdraw" && amountBn > lpAllowance;
+  const needsWithdrawApproval = false;
 
   const resetState = useCallback(() => {
     setStep("idle");
@@ -86,8 +102,8 @@ export function LiquidityScreen() {
   }, []);
 
   const waitForTx = async (hash: string) => {
-    if (publicClient) {
-      await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+    if (publicClient && isTransactionHash(hash)) {
+      await publicClient.waitForTransactionReceipt({ hash });
     }
   };
 
@@ -105,9 +121,9 @@ export function LiquidityScreen() {
       await waitForTx(hash);
       refetchAll();
       setStep("success");
-    } catch (err: any) {
-      console.error("Deposit failed:", err);
-      setErrorMsg(err?.shortMessage || err?.message || "Transaction rejected or failed.");
+    } catch (error) {
+      console.error("Deposit failed:", error);
+      setErrorMsg(getErrorMessage(error));
       setStep("error");
     }
   };
@@ -126,9 +142,9 @@ export function LiquidityScreen() {
       await waitForTx(hash);
       refetchAll();
       setStep("success");
-    } catch (err: any) {
-      console.error("Withdraw failed:", err);
-      setErrorMsg(err?.shortMessage || err?.message || "Transaction rejected or failed.");
+    } catch (error) {
+      console.error("Withdraw failed:", error);
+      setErrorMsg(getErrorMessage(error));
       setStep("error");
     }
   };
@@ -137,14 +153,21 @@ export function LiquidityScreen() {
     setErrorMsg(null);
     setTxHash(null);
     if (activeTab === "deposit") {
-      handleDeposit();
+      void handleDeposit();
     } else {
-      handleWithdraw();
+      void handleWithdraw();
     }
   };
 
   const actionWord = activeTab === "deposit" ? "deposited" : "withdrew";
-  const shareText = `Just ${actionWord} ${amountStr} ${selectedToken} as liquidity into the WizPay StableFX Vault on Arc Testnet! 💧🚀\n\nVerify on-chain: ${EXPLORER_BASE_URL}/tx/${txHash}`;
+  const explorerUrl = getExplorerTxUrl(txHash);
+  const shareText = `Just ${actionWord} ${amountStr} ${selectedToken} as liquidity into the WizPay StableFX Vault on Arc Testnet! 💧🚀${
+    explorerUrl
+      ? `\n\nVerify on-chain: ${explorerUrl}`
+      : txHash
+        ? `\n\nCircle reference: ${txHash}`
+        : ""
+  }`;
   const xShareUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
 
   if (step === "success") {
@@ -188,17 +211,28 @@ export function LiquidityScreen() {
               </div>
               {txHash && (
                 <div className="mt-4 flex items-center justify-between rounded-xl border border-border/30 bg-background/50 px-3 py-2.5 text-sm">
-                  <span className="font-mono text-muted-foreground/70 text-xs">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/55">
+                      {explorerUrl ? "Transaction" : "Circle Reference"}
+                    </p>
+                    <span className="font-mono text-muted-foreground/70 text-xs">
                     {formatCompactAddress(txHash)}
-                  </span>
-                  <a
-                    href={`${EXPLORER_BASE_URL}/tx/${txHash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
-                  >
-                    Explorer <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
+                    </span>
+                  </div>
+                  {explorerUrl ? (
+                    <a
+                      href={explorerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+                    >
+                      Explorer <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  ) : (
+                    <span className="text-xs font-semibold text-emerald-300/85">
+                      Explorer link unavailable
+                    </span>
+                  )}
                 </div>
               )}
             </div>

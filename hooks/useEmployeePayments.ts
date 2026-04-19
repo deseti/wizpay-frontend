@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { type Address, type Hex, decodeEventLog, erc20Abi } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { type Address, type Hex } from "viem";
+import { usePublicClient } from "wagmi";
 
 import {
   WIZPAY_BATCH_PAYMENT_ROUTED_EVENT,
@@ -13,6 +12,7 @@ import {
   WIZPAY_HISTORY_FROM_BLOCK,
 } from "@/constants/addresses";
 import { TOKEN_BY_ADDRESS } from "@/constants/erc20";
+import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import type { EmployeePayment } from "@/lib/dashboard-utils";
 
 /**
@@ -24,7 +24,7 @@ import type { EmployeePayment } from "@/lib/dashboard-utils";
  */
 export function useEmployeePayments() {
   const publicClient = usePublicClient();
-  const { address: walletAddress } = useAccount();
+  const { walletAddress } = useActiveWalletAddress();
 
   const query = useQuery({
     queryKey: [
@@ -77,16 +77,6 @@ export function useEmployeePayments() {
               // The ERC-20 Transfer event topic
               const transferTopic =
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-
-              const transferLogs = receipt.logs.filter(
-                (rl) =>
-                  rl.topics[0] === transferTopic &&
-                  // Exclude approval-related transfers back to sender
-                  rl.topics[1]?.toLowerCase() !==
-                    `0x000000000000000000000000${(walletAddress as string).slice(2).toLowerCase()}` ||
-                  // Include all transfers FROM the contract
-                  rl.address.toLowerCase() !== contractAddr.toLowerCase()
-              );
 
               // Parse Transfer events that represent payments to recipients
               // (from the WizPay contract to individual addresses)

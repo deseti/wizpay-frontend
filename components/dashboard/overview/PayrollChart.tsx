@@ -11,6 +11,11 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import type { TooltipContentProps } from "recharts/types/component/Tooltip";
+import type {
+  NameType,
+  ValueType,
+} from "recharts/types/component/DefaultTooltipContent";
 
 import {
   Card,
@@ -36,7 +41,11 @@ type TimeRange = "1M" | "6M" | "All";
 
 const TIME_RANGES: TimeRange[] = ["6M", "1M", "All"];
 
-function CustomTooltip({ active, payload, label }: any) {
+function CustomTooltip({
+  active,
+  payload,
+  label,
+}: TooltipContentProps<ValueType, NameType>) {
   if (!active || !payload?.length) return null;
 
   return (
@@ -44,21 +53,32 @@ function CustomTooltip({ active, payload, label }: any) {
       <p className="mb-1.5 text-xs font-semibold text-foreground/90">
         {label}
       </p>
-      {payload.map((entry: any) => (
+      {payload.map((entry) => {
+        const dataKey =
+          typeof entry.dataKey === "string"
+            ? entry.dataKey
+            : String(entry.dataKey ?? "value");
+        const rawValue = Array.isArray(entry.value)
+          ? entry.value[0]
+          : entry.value;
+        const numericValue =
+          typeof rawValue === "number" ? rawValue : Number(rawValue ?? 0);
+
+        return (
         <div
-          key={entry.dataKey}
+          key={dataKey}
           className="flex items-center gap-2 text-sm"
         >
           <span
             className="h-2 w-2 rounded-full"
             style={{ backgroundColor: entry.color }}
           />
-          <span className="text-muted-foreground">{entry.dataKey}:</span>
+          <span className="text-muted-foreground">{dataKey}:</span>
           <span className="font-mono font-semibold">
-            {formatCurrencyNumber(entry.value)}
+            {formatCurrencyNumber(numericValue)}
           </span>
         </div>
-      ))}
+      )})}
     </div>
   );
 }
@@ -183,7 +203,7 @@ export function PayrollChart({ data, isLoading }: PayrollChartProps) {
                     v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v}`
                   }
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={(props) => <CustomTooltip {...props} />} />
                 {tokenKeys.map((key) => (
                   <Area
                     key={key}

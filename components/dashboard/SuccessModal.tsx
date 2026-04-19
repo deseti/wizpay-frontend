@@ -15,7 +15,9 @@ import {
 interface SuccessModalProps {
   isOpen: boolean;
   onClose: () => void;
-  txHash: Hex | null;
+  txHash: string | null;
+  approvalTxHash?: string | null;
+  txHashes?: string[];
   totalAmount: bigint;
   tokenSymbol: TokenSymbol;
   decimals: number;
@@ -25,10 +27,16 @@ interface SuccessModalProps {
   sessionTotalDistributed: Record<TokenSymbol, bigint>;
 }
 
+function isExplorerHash(value: string): value is Hex {
+  return /^0x[a-fA-F0-9]{64}$/.test(value);
+}
+
 export function SuccessModal({
   isOpen,
   onClose,
   txHash,
+  approvalTxHash,
+  txHashes = [],
   totalAmount,
   tokenSymbol,
   decimals,
@@ -40,7 +48,18 @@ export function SuccessModal({
   if (!isOpen) return null;
 
   const amountFormatted = formatTokenAmount(totalAmount, decimals, 2);
-  const shareText = `Just routed a cross-token payroll of ${amountFormatted} ${tokenSymbol} to ${recipientCount} recipients in a single tx via WizPay on Arc Testnet! 🚀\n\nVerify it on-chain: ${EXPLORER_BASE_URL}/tx/${txHash}`;
+  const submissionHashes = txHashes.filter(
+    (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index
+  );
+  const shareSummary = isMultiBatch
+    ? `Just settled a payroll of ${amountFormatted} ${tokenSymbol} to ${recipientCount} recipients across multiple submissions on Arc Testnet! 🚀`
+    : `Just settled a payroll of ${amountFormatted} ${tokenSymbol} to ${recipientCount} recipients on Arc Testnet! 🚀`;
+  const shareDetails = txHash
+    ? isExplorerHash(txHash)
+      ? `\n\nVerify it on-chain: ${EXPLORER_BASE_URL}/tx/${txHash}`
+      : `\n\nCircle settlement reference: ${txHash}`
+    : "";
+  const shareText = `${shareSummary}${shareDetails}`;
   const xShareUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(
     shareText
   )}`;
@@ -73,10 +92,10 @@ export function SuccessModal({
 
           <div className="space-y-2">
             <h2 className="text-2xl font-bold tracking-tight neon-text">
-              Batch Sent Successfully!
+              Payroll Settled Successfully!
             </h2>
             <p className="text-sm text-muted-foreground">
-              Your payroll route is confirmed on the Arc Testnet.
+              Your latest payroll settlement completed successfully on Arc.
             </p>
           </div>
 
@@ -120,6 +139,64 @@ export function SuccessModal({
               </div>
             </div>
 
+            {approvalTxHash ? (
+              <div className="mt-5 flex items-center justify-between rounded-xl border border-border/30 bg-background/50 px-3 py-2.5 text-sm">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/55">
+                    Approval Tx
+                  </p>
+                  <span className="font-mono text-muted-foreground/70 text-xs">
+                    {formatCompactAddress(approvalTxHash)}
+                  </span>
+                </div>
+                {isExplorerHash(approvalTxHash) ? (
+                  <a
+                    href={`${EXPLORER_BASE_URL}/tx/${approvalTxHash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors text-sm"
+                  >
+                    Explorer <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
+
+            {submissionHashes.length > 0 ? (
+              <div className="mt-5 flex flex-col gap-2 rounded-xl border border-border/30 bg-background/50 px-3 py-3 text-sm text-left">
+                <p className="text-xs uppercase text-muted-foreground/60 font-semibold">
+                  {submissionHashes.length > 1 ? "Batch Transactions" : "Transaction"}
+                </p>
+                <div className="flex flex-col gap-2">
+                  {submissionHashes.map((hash, index) => (
+                    <div
+                      key={`${hash}-${index}`}
+                      className="flex items-center justify-between rounded-lg border border-border/25 bg-background/45 px-3 py-2"
+                    >
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/55">
+                          {submissionHashes.length > 1 ? `Batch ${index + 1}` : "Final Tx"}
+                        </p>
+                        <span className="font-mono text-muted-foreground/70 text-xs">
+                          {formatCompactAddress(hash)}
+                        </span>
+                      </div>
+                      {isExplorerHash(hash) ? (
+                        <a
+                          href={`${EXPLORER_BASE_URL}/tx/${hash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors text-sm"
+                        >
+                          Explorer <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {isMultiBatch ? (
               <div className="mt-5 flex flex-col gap-2 rounded-xl border border-border/30 bg-background/50 px-3 py-3 text-sm text-left">
                 <div className="flex items-center justify-between">
@@ -127,24 +204,30 @@ export function SuccessModal({
                   <span className="font-mono font-bold text-emerald-400">{referenceId.replace(/-\d+$/, "")}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  View full batch details and transaction hashes in the History tab.
+                  Each batch hash is shown above and the full recipient breakdown remains in History.
                 </p>
               </div>
-            ) : txHash && (
+            ) : txHash && submissionHashes.length === 0 ? (
               <div className="mt-5 flex items-center justify-between rounded-xl border border-border/30 bg-background/50 px-3 py-2.5 text-sm">
                 <span className="font-mono text-muted-foreground/70 text-xs">
                   {formatCompactAddress(txHash)}
                 </span>
-                <a
-                  href={`${EXPLORER_BASE_URL}/tx/${txHash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors text-sm"
-                >
-                  Explorer <ExternalLink className="h-3.5 w-3.5" />
-                </a>
+                {isExplorerHash(txHash) ? (
+                  <a
+                    href={`${EXPLORER_BASE_URL}/tx/${txHash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 font-semibold text-emerald-400 hover:text-emerald-300 transition-colors text-sm"
+                  >
+                    Explorer <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : (
+                  <span className="text-xs font-semibold text-emerald-300/85">
+                    Circle Settlement Reference
+                  </span>
+                )}
               </div>
-            )}
+            ) : null}
           </div>
 
           <div className="flex w-full flex-col gap-3">

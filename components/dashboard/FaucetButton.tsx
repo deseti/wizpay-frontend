@@ -2,56 +2,75 @@
 
 import { useState } from "react";
 import { Droplet, Copy, Check } from "lucide-react";
-import { useAccount } from "wagmi";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { useSmartWalletAddress } from "@/hooks/useSmartWalletAddress";
 
 function truncateAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
 export function FaucetButton() {
-  const { address } = useAccount();
+  const {
+    smartWalletAddress,
+    isLoadingSmartWalletAddress,
+  } = useSmartWalletAddress();
   const { toast } = useToast();
-  const [copied, setCopied] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState<"wallet" | null>(null);
+
+  async function copyAddress(address: string) {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedAddress("wallet");
+      toast({
+        title: "Circle wallet address copied",
+        description:
+          "Use this address for Arc Testnet balances and upcoming Circle challenge-based actions.",
+      });
+      window.setTimeout(() => setCopiedAddress(null), 2000);
+    } catch (error) {
+      console.error(error);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-3">
-      {address && (
+      {isLoadingSmartWalletAddress ? (
         <div className="space-y-1.5">
           <p className="px-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-[0.2em]">
-            1. Copy your address
+            Smart Wallet
+          </p>
+          <div className="h-11 rounded-xl border border-border/40 bg-background/20 animate-pulse" />
+        </div>
+      ) : null}
+
+      {smartWalletAddress && (
+        <div className="space-y-1.5">
+          <p className="px-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-[0.2em]">
+            Circle Wallet
           </p>
           <button
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(address);
-                setCopied(true);
-                toast({
-                  title: "Address Copied!",
-                  description: "Paste this into the Circle Faucet.",
-                });
-                setTimeout(() => setCopied(false), 2000);
-              } catch (e) {
-                console.error(e);
-              }
-            }}
+            onClick={() => void copyAddress(smartWalletAddress)}
             className="flex w-full items-center justify-between rounded-xl border border-border/40 bg-background/30 px-3 py-2.5 text-sm font-mono text-foreground/75 transition-all hover:bg-primary/8 hover:text-primary hover:border-primary/20 active:scale-[0.98]"
           >
-            {truncateAddress(address)}
-            {copied ? (
+            {truncateAddress(smartWalletAddress)}
+            {copiedAddress === "wallet" ? (
               <Check className="h-4 w-4 text-emerald-400" />
             ) : (
               <Copy className="h-4 w-4 text-muted-foreground/50" />
             )}
           </button>
+          <p className="px-1 text-[11px] text-muted-foreground/60 leading-relaxed">
+            Fund this Circle user wallet with testnet assets before running payroll,
+            swap, or bridge flows as they move to Circle execution.
+          </p>
         </div>
       )}
 
       <div className="space-y-1.5">
-        {address && (
+        {smartWalletAddress && (
           <p className="px-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-[0.2em]">
-            2. Request Tokens
+            Circle Faucet
           </p>
         )}
         <Button
@@ -67,7 +86,7 @@ export function FaucetButton() {
             <div className="flex items-center justify-center rounded-lg bg-primary/15 p-1.5 text-primary group-hover:scale-110 group-hover:shadow-lg group-hover:shadow-primary/20 transition-all">
               <Droplet className="h-4 w-4" />
             </div>
-            Get Testnet Tokens ↗
+            Get Circle Test Tokens ↗
           </a>
         </Button>
       </div>

@@ -1,6 +1,14 @@
-import { createConfig } from "@privy-io/wagmi";
-import { http } from "wagmi";
+import { createConfig, http } from "wagmi";
 import { defineChain } from "viem";
+import { sepolia } from "viem/chains";
+
+export const ARC_TESTNET_RPC_URL =
+  process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL ||
+  "https://rpc.testnet.arc.network";
+
+export const ETHEREUM_SEPOLIA_RPC_URL =
+  process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL ||
+  "https://ethereum-sepolia-rpc.publicnode.com";
 
 /**
  * Arc Testnet — custom chain definition
@@ -15,7 +23,10 @@ export const arcTestnet = defineChain({
   },
   rpcUrls: {
     default: {
-      http: ["https://rpc.testnet.arc.network"],
+      http: [ARC_TESTNET_RPC_URL],
+    },
+    public: {
+      http: [ARC_TESTNET_RPC_URL],
     },
   },
   blockExplorers: {
@@ -27,14 +38,29 @@ export const arcTestnet = defineChain({
   testnet: true,
 });
 
+export const ethereumSepolia = defineChain({
+  ...sepolia,
+  rpcUrls: {
+    ...sepolia.rpcUrls,
+    default: {
+      http: [ETHEREUM_SEPOLIA_RPC_URL],
+    },
+    public: {
+      http: [ETHEREUM_SEPOLIA_RPC_URL],
+    },
+  },
+});
+
 /**
- * Wagmi configuration — synced with Privy auth state
- * Using createConfig from @privy-io/wagmi ensures wallet connections
- * are automatically driven by Privy's authentication.
+ * Wagmi configuration for public reads on Arc Testnet and Ethereum Sepolia.
+ * Circle user-controlled wallets are handled outside wagmi, while read hooks
+ * continue to use wagmi public clients.
  */
 export const config = createConfig({
-  chains: [arcTestnet],
+  chains: [arcTestnet, ethereumSepolia],
+  ssr: true,
   transports: {
-    [arcTestnet.id]: http(),
+    [arcTestnet.id]: http(ARC_TESTNET_RPC_URL),
+    [ethereumSepolia.id]: http(ETHEREUM_SEPOLIA_RPC_URL),
   },
 });

@@ -1,7 +1,7 @@
 import { formatUnits, type Address } from "viem";
 
 import { TOKEN_BY_ADDRESS } from "@/constants/erc20";
-import { EXPLORER_BASE_URL, type TokenSymbol } from "@/lib/wizpay";
+import { EXPLORER_BASE_URL } from "@/lib/wizpay";
 
 /* ── Types ── */
 

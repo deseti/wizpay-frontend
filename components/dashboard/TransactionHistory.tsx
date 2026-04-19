@@ -26,9 +26,7 @@ import { TOKEN_BY_ADDRESS } from "@/constants/erc20";
 import type { UnifiedHistoryItem, HistoryActionType } from "@/lib/types";
 import {
   EXPLORER_BASE_URL,
-  formatCompactAddress,
   formatTokenAmount,
-  SUPPORTED_TOKENS,
 } from "@/lib/wizpay";
 
 const PAGE_SIZE = 10;

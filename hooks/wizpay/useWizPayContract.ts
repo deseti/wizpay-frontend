@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
-import { type Address, type Hex } from "viem";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { encodeFunctionData, type Address, type Hex } from "viem";
 import {
-  useAccount,
   usePublicClient,
   useReadContract,
   useReadContracts,
-  useWriteContract,
+  useWalletClient,
 } from "wagmi";
 
 import { useToast } from "@/hooks/use-toast";
+import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
+import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 
-import { WIZPAY_ABI } from "@/constants/abi";
+import { WIZPAY_ABI, WIZPAY_BATCH_PAYMENT_ROUTED_EVENT } from "@/constants/abi";
 import { WIZPAY_ADDRESS } from "@/constants/addresses";
 import { ERC20_ABI } from "@/constants/erc20";
 import {
@@ -18,18 +19,104 @@ import {
   PREVIEW_SLIPPAGE_BPS,
   SUPPORTED_TOKENS,
   getFriendlyErrorMessage,
+  parseAmountToUnits,
   sameAddress,
   type TokenSymbol,
 } from "@/lib/wizpay";
-import type { PreparedRecipient, QuoteSummary, WizPayState } from "@/lib/types";
+import type { QuoteSummary, TransactionActionResult } from "@/lib/types";
 import type { useWizPayState } from "./useWizPayState";
 import {
   isStableFxMode,
   activeFxEngineAddress,
   fxProviderLabel,
+  permit2Address,
 } from "@/lib/fx-config";
+import { executeFxTrade, getFxTradeStatus, getQuote } from "@/lib/fx-service";
+import { arcTestnet } from "@/lib/wagmi";
 
 type BaseState = ReturnType<typeof useWizPayState>;
+type BatchSettlementLog = {
+  transactionHash: Hex | null;
+  args: {
+    referenceId?: string;
+  };
+};
+
+const CIRCLE_FEE_LEVEL = "MEDIUM";
+const POLL_INTERVAL_MS = 1500;
+const MAX_CONFIRMATION_POLLS = 20;
+
+function isExplorerHash(value: string | null | undefined): value is Hex {
+  return /^0x[a-fA-F0-9]{64}$/.test(value ?? "");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function getNestedString(source: unknown, path: string[]): string | null {
+  let current: unknown = source;
+
+  for (const key of path) {
+    const record = asRecord(current);
+
+    if (!record || typeof record[key] === "undefined") {
+      return null;
+    }
+
+    current = record[key];
+  }
+
+  return typeof current === "string" && current ? current : null;
+}
+
+function extractCircleTxHash(value: unknown): Hex | null {
+  const candidate =
+    getNestedString(value, ["data", "txHash"]) ??
+    getNestedString(value, ["data", "transactionHash"]) ??
+    getNestedString(value, ["txHash"]) ??
+    getNestedString(value, ["transactionHash"]);
+
+  return isExplorerHash(candidate) ? candidate : null;
+}
+
+function extractCircleReference(value: unknown): string | null {
+  return (
+    getNestedString(value, ["data", "id"]) ??
+    getNestedString(value, ["data", "transactionId"]) ??
+    getNestedString(value, ["id"]) ??
+    getNestedString(value, ["transactionId"]) ??
+    getNestedString(value, ["challengeId"]) ??
+    getNestedString(value, ["challenge", "id"]) ??
+    null
+  );
+}
+
+function waitFor(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isStableFxAuthorizationError(error: unknown): boolean {
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "";
+
+  const message = rawMessage.toLowerCase();
+
+  return (
+    message.includes("stablefx api key") ||
+    message.includes("not permitted to use stablefx") ||
+    message.includes("missing_api_key") ||
+    message.includes("401 unauthorized")
+  );
+}
 
 export function useWizPayContract({
   state,
@@ -40,18 +127,22 @@ export function useWizPayContract({
   batchAmount: bigint;
   validRecipientCount: number;
 }) {
-  const { address: walletAddress } = useAccount();
+  const { walletAddress } = useActiveWalletAddress();
+  const { arcWallet, createContractExecutionChallenge, executeChallenge } =
+    useCircleWallet();
   const publicClient = usePublicClient();
-  const { writeContractAsync } = useWriteContract();
+  const { data: walletClient } = useWalletClient({ chainId: arcTestnet.id });
   const { toast } = useToast();
 
   const activeToken = SUPPORTED_TOKENS[state.selectedToken];
+  const allowanceSpender = isStableFxMode ? permit2Address : WIZPAY_ADDRESS;
+  const deferredRecipients = useDeferredValue(state.preparedRecipients);
 
   const { data: currentAllowanceData, refetch: refetchAllowance } = useReadContract({
     address: activeToken.address,
     abi: ERC20_ABI,
     functionName: "allowance",
-    args: walletAddress ? [walletAddress, WIZPAY_ADDRESS] : undefined,
+    args: walletAddress ? [walletAddress, allowanceSpender] : undefined,
     query: { enabled: !!walletAddress },
   });
 
@@ -128,7 +219,27 @@ export function useWizPayContract({
 
   const currentAllowance = currentAllowanceData ?? 0n;
   const currentBalance = currentBalanceData ?? 0n;
-  const feeBps = feeBpsData ?? 0n;
+  const approvalAmount = useMemo(() => {
+    if (!isStableFxMode) {
+      return batchAmount;
+    }
+
+    return state.preparedRecipients.reduce((totalAmount, recipient) => {
+      const targetToken = SUPPORTED_TOKENS[recipient.targetToken];
+
+      if (sameAddress(activeToken.address, targetToken.address)) {
+        return totalAmount;
+      }
+
+      return totalAmount + recipient.amountUnits;
+    }, 0n);
+  }, [activeToken.address, batchAmount, state.preparedRecipients]);
+  const [stableFxQuoteSummary, setStableFxQuoteSummary] = useState<QuoteSummary>({
+    estimatedAmountsOut: [],
+    totalEstimatedOut: 0n,
+    totalFees: 0n,
+  });
+  const [stableFxDiagnostics, setStableFxDiagnostics] = useState<(string | null)[]>([]);
 
   const engineBalances = useMemo<Record<TokenSymbol, bigint>>(() => {
     return {
@@ -138,6 +249,16 @@ export function useWizPayContract({
   }, [lBalancesData]);
 
   const quoteSummary = useMemo<QuoteSummary>(() => {
+    if (isStableFxMode) {
+      return {
+        estimatedAmountsOut: state.preparedRecipients.map(
+          (_, index) => stableFxQuoteSummary.estimatedAmountsOut[index] ?? 0n
+        ),
+        totalEstimatedOut: stableFxQuoteSummary.totalEstimatedOut,
+        totalFees: stableFxQuoteSummary.totalFees,
+      };
+    }
+
     if (!rawQuoteData) {
       return {
         estimatedAmountsOut: state.preparedRecipients.map(() => 0n),
@@ -150,9 +271,130 @@ export function useWizPayContract({
       totalEstimatedOut: rawQuoteData[1],
       totalFees: rawQuoteData[2],
     };
-  }, [rawQuoteData, state.preparedRecipients]);
+  }, [rawQuoteData, stableFxQuoteSummary, state.preparedRecipients]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function hydrateStableFxPreview() {
+      if (!isStableFxMode) {
+        setStableFxQuoteSummary({
+          estimatedAmountsOut: [],
+          totalEstimatedOut: 0n,
+          totalFees: 0n,
+        });
+        setStableFxDiagnostics([]);
+        return;
+      }
+
+      if (deferredRecipients.length === 0) {
+        setStableFxQuoteSummary({
+          estimatedAmountsOut: [],
+          totalEstimatedOut: 0n,
+          totalFees: 0n,
+        });
+        setStableFxDiagnostics([]);
+        return;
+      }
+
+      const estimatedAmountsOut = deferredRecipients.map(() => 0n);
+      const diagnostics = deferredRecipients.map(() => null as string | null);
+      let totalEstimatedOut = 0n;
+      let totalFees = 0n;
+      let stableFxAuthError: string | null = null;
+
+      for (let index = 0; index < deferredRecipients.length; index += 1) {
+        const recipient = deferredRecipients[index];
+        const tokenOut = SUPPORTED_TOKENS[recipient.targetToken];
+
+        if (!recipient.validAddress || recipient.amountUnits === 0n) {
+          continue;
+        }
+
+        if (sameAddress(activeToken.address, tokenOut.address)) {
+          estimatedAmountsOut[index] = recipient.amountUnits;
+          totalEstimatedOut += recipient.amountUnits;
+          continue;
+        }
+
+        if (stableFxAuthError) {
+          diagnostics[index] = stableFxAuthError;
+          continue;
+        }
+
+        try {
+          const quote = await getQuote({
+            sourceCurrency: activeToken.symbol,
+            targetCurrency: recipient.targetToken,
+            sourceAmount: recipient.amount,
+          });
+
+          if (!quote) {
+            diagnostics[index] = `Circle quote is unavailable for row ${index + 1}.`;
+            continue;
+          }
+
+          const amountOut = parseAmountToUnits(
+            quote.targetAmount,
+            tokenOut.decimals
+          );
+          const feeAmount = parseAmountToUnits(
+            quote.feeAmount,
+            tokenOut.decimals
+          );
+
+          estimatedAmountsOut[index] = amountOut;
+          totalEstimatedOut += amountOut;
+          totalFees += feeAmount;
+        } catch (error) {
+          const friendlyMessage = getFriendlyErrorMessage(error);
+
+          if (isStableFxAuthorizationError(error)) {
+            stableFxAuthError = friendlyMessage;
+            diagnostics[index] = friendlyMessage;
+            continue;
+          }
+
+          diagnostics[index] = `Circle quote failed for row ${index + 1}: ${friendlyMessage}`;
+        }
+      }
+
+      if (cancelled) return;
+
+      setStableFxQuoteSummary({
+        estimatedAmountsOut,
+        totalEstimatedOut,
+        totalFees,
+      });
+      setStableFxDiagnostics(diagnostics);
+    }
+
+    void hydrateStableFxPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeToken.address, activeToken.symbol, deferredRecipients]);
+
+  const feeBps = useMemo(() => {
+    if (!isStableFxMode) {
+      return feeBpsData ?? 0n;
+    }
+
+    if (batchAmount === 0n || quoteSummary.totalFees === 0n) {
+      return 0n;
+    }
+
+    return (quoteSummary.totalFees * 10000n) / batchAmount;
+  }, [batchAmount, feeBpsData, quoteSummary.totalFees]);
 
   const rowDiagnostics = useMemo<(string | null)[]>(() => {
+    if (isStableFxMode) {
+      return state.preparedRecipients.map(
+        (_, index) => stableFxDiagnostics[index] ?? null
+      );
+    }
+
     return state.preparedRecipients.map((recipient, i) => {
       const isCross = !sameAddress(
         SUPPORTED_TOKENS[state.selectedToken].address,
@@ -168,69 +410,458 @@ export function useWizPayContract({
       }
       return null;
     });
-  }, [engineBalances, state.preparedRecipients, quoteSummary.estimatedAmountsOut, state.selectedToken]);
+  }, [engineBalances, stableFxDiagnostics, state.preparedRecipients, quoteSummary.estimatedAmountsOut, state.selectedToken]);
 
   const hasRouteIssue = rowDiagnostics.some(Boolean);
-  const needsApproval = currentAllowance < batchAmount;
+  const needsApproval = approvalAmount > 0n && currentAllowance < approvalAmount;
   const insufficientBalance = currentBalance < batchAmount;
 
   // Track gas for simulation manually
   const [estimatedGas, setEstimatedGas] = useState<bigint | null>(null);
 
-  const handleApprove = async () => {
-    if (batchAmount <= 0n) return;
+  const waitForAllowanceUpdate = async ({
+    txHash,
+    targetAmount,
+  }: {
+    txHash: Hex | null;
+    targetAmount: bigint;
+  }) => {
+    if (!publicClient) {
+      throw new Error("Arc public client is not ready yet.");
+    }
 
+    if (txHash) {
+      await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        confirmations: 1,
+      });
+    }
+
+    for (let attempt = 0; attempt < MAX_CONFIRMATION_POLLS; attempt += 1) {
+      const result = await refetchAllowance();
+      const nextAllowance = result.data ?? 0n;
+
+      if (nextAllowance >= targetAmount) {
+        return;
+      }
+
+      if (attempt < MAX_CONFIRMATION_POLLS - 1) {
+        await waitFor(POLL_INTERVAL_MS);
+      }
+    }
+
+    throw new Error(
+      "Circle approval completed, but the token allowance did not update before the timeout window ended."
+    );
+  };
+
+  const waitForBatchSettlement = async ({
+    startBlock,
+    txHash,
+  }: {
+    startBlock: bigint;
+    txHash: Hex | null;
+  }) => {
+    if (!publicClient) {
+      throw new Error("Arc public client is not ready yet.");
+    }
+
+    if (txHash) {
+      try {
+        await publicClient.waitForTransactionReceipt({
+          hash: txHash,
+          confirmations: 1,
+        });
+        return txHash;
+      } catch {
+        // Fall through to the event watcher path when Circle does not expose a final tx hash consistently.
+      }
+    }
+
+    for (let attempt = 0; attempt < MAX_CONFIRMATION_POLLS; attempt += 1) {
+      const logsWithSender = walletAddress
+        ? ((await publicClient.getLogs({
+            address: WIZPAY_ADDRESS,
+            event: WIZPAY_BATCH_PAYMENT_ROUTED_EVENT,
+            args: { sender: walletAddress },
+            fromBlock: startBlock,
+          })) as BatchSettlementLog[])
+        : [];
+      const logsWithoutSender = (await publicClient.getLogs({
+        address: WIZPAY_ADDRESS,
+        event: WIZPAY_BATCH_PAYMENT_ROUTED_EVENT,
+        fromBlock: startBlock,
+      })) as BatchSettlementLog[];
+      const candidateLogs =
+        logsWithSender.length > 0 ? logsWithSender : logsWithoutSender;
+
+      const matchedLog = candidateLogs.find(
+        (log) =>
+          Boolean(log.transactionHash) &&
+          log.args.referenceId === state.referenceId.trim()
+      );
+
+      if (matchedLog?.transactionHash) {
+        return matchedLog.transactionHash;
+      }
+
+      if (attempt < MAX_CONFIRMATION_POLLS - 1) {
+        await waitFor(POLL_INTERVAL_MS);
+      }
+    }
+
+    if (txHash) {
+      return txHash;
+    }
+
+    throw new Error(
+      "Circle reported the batch challenge complete, but no BatchPaymentRouted event was found before the timeout window ended."
+    );
+  };
+
+  const requestApproval = async (
+    approvalTarget: bigint
+  ): Promise<TransactionActionResult> => {
+    if (approvalTarget <= 0n) {
+      return { ok: true, hash: null };
+    }
+
+    state.setApproveTxHash(null);
     state.setApprovalState("signing");
     state.setErrorMessage(null);
-    state.setStatusMessage("Requesting token approval...");
+    state.setStatusMessage(
+      isStableFxMode
+        ? "Requesting Permit2 approval for Circle settlement..."
+        : "Requesting token approval..."
+    );
+
+    if (!publicClient) {
+      state.setApprovalState("idle");
+      state.setErrorMessage("Arc public client is not ready yet.");
+      state.setStatusMessage(null);
+      return { ok: false, hash: null };
+    }
+
+    if (!walletAddress) {
+      state.setApprovalState("idle");
+      state.setErrorMessage(
+        "Sign in with your Circle Arc wallet before requesting approval."
+      );
+      state.setStatusMessage(null);
+      return { ok: false, hash: null };
+    }
+
+    if (!arcWallet?.id) {
+      state.setApprovalState("idle");
+      state.setErrorMessage(
+        "Circle Arc wallet metadata is missing. Refresh the session and try again."
+      );
+      state.setStatusMessage(null);
+      return { ok: false, hash: null };
+    }
+
+    const referenceBase = state.referenceId.trim() || "WIZPAY";
 
     try {
-      const hash = await writeContractAsync({
-        address: activeToken.address,
+      const callData = encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "approve",
-        args: [WIZPAY_ADDRESS, batchAmount],
+        args: [allowanceSpender, approvalTarget],
       });
 
-      state.setApprovalState("confirming");
-      state.setApproveTxHash(hash);
-      state.setStatusMessage("Waiting for approval confirmation...");
+      state.setStatusMessage("Creating Circle approval challenge...");
 
-      await publicClient!.waitForTransactionReceipt({ hash, confirmations: 1 });
-      await refetchAllowance();
+      const challenge = await createContractExecutionChallenge({
+        walletId: arcWallet.id,
+        contractAddress: activeToken.address,
+        callData,
+        feeLevel: CIRCLE_FEE_LEVEL,
+        refId: `${referenceBase}-approve`,
+      });
+
+      state.setStatusMessage(
+        "Confirm the approval in the Circle wallet window..."
+      );
+
+      const challengeResult = await executeChallenge(challenge.challengeId);
+      const txHash =
+        extractCircleTxHash(challengeResult) ??
+        extractCircleTxHash(challenge.raw);
+
+      if (txHash) {
+        state.setApproveTxHash(txHash);
+      }
+
+      state.setApprovalState("confirming");
+      state.setStatusMessage(
+        txHash
+          ? "Waiting for approval confirmation on Arc..."
+          : "Waiting for approval allowance to update..."
+      );
+
+      await waitForAllowanceUpdate({
+        txHash,
+        targetAmount: approvalTarget,
+      });
 
       state.setApprovalState("confirmed");
-      state.setStatusMessage("Approval confirmed! You can now submit the batch.");
-      
-      // Auto-clear success message eventually
-      setTimeout(() => state.setStatusMessage(null), 3000);
-    } catch (e: any) {
+      state.setStatusMessage(
+        "Approval confirmed! You can now submit the batch."
+      );
+
+      window.setTimeout(() => state.setStatusMessage(null), 3000);
+
+      return {
+        ok: true,
+        hash: txHash ?? null,
+      };
+    } catch (e: unknown) {
       state.setApprovalState("idle");
       state.setErrorMessage(getFriendlyErrorMessage(e));
       state.setStatusMessage(null);
+      return { ok: false, hash: null };
     }
   };
 
-  const handleSubmit = async () => {
-    if (!state.validate() || hasRouteIssue) return;
+  const handleApprove = async () => requestApproval(approvalAmount);
+
+  const handleSubmit = async (): Promise<TransactionActionResult> => {
+    if (!state.validate() || hasRouteIssue) {
+      return { ok: false, hash: null };
+    }
     if (batchAmount > currentBalance) {
       state.setErrorMessage("Insufficient token balance for this batch.");
-      return;
+      return { ok: false, hash: null };
+    }
+
+    state.setSubmitTxHash(null);
+
+    if (isStableFxMode) {
+      if (!publicClient) {
+        state.setErrorMessage("Arc public client is not ready yet.");
+        return { ok: false, hash: null };
+      }
+
+      if (!walletAddress) {
+        state.setErrorMessage(
+          "Connect your Circle Arc wallet before settling through Circle."
+        );
+        return { ok: false, hash: null };
+      }
+
+      if (!arcWallet?.id) {
+        state.setErrorMessage(
+          "Circle Arc wallet metadata is missing. Refresh the session and try again."
+        );
+        return { ok: false, hash: null };
+      }
+
+      const hasCrossCurrencyRoute = state.preparedRecipients.some((recipient) => {
+        const targetToken = SUPPORTED_TOKENS[recipient.targetToken];
+
+        return !sameAddress(activeToken.address, targetToken.address);
+      });
+
+      if (hasCrossCurrencyRoute && !walletClient) {
+        state.setErrorMessage(
+          "StableFX signature is not ready on Arc. Reconnect the wallet session and try again."
+        );
+        return { ok: false, hash: null };
+      }
+
+      state.setSubmitState("simulating");
+      state.setErrorMessage(null);
+      state.setStatusMessage("Preparing Circle StableFX settlements...");
+      setEstimatedGas(null);
+
+      try {
+        const totalDistributed: Record<TokenSymbol, bigint> = {
+          USDC: 0n,
+          EURC: 0n,
+        };
+        let settledRecipients = 0;
+        let finalHash: string | null = null;
+
+        for (let index = 0; index < state.preparedRecipients.length; index += 1) {
+          const recipient = state.preparedRecipients[index];
+          const targetToken = SUPPORTED_TOKENS[recipient.targetToken];
+
+          if (sameAddress(activeToken.address, targetToken.address)) {
+            state.setSubmitState("wallet");
+            state.setStatusMessage(
+              `Confirm Circle transfer ${index + 1} of ${state.preparedRecipients.length}...`
+            );
+
+            const callData = encodeFunctionData({
+              abi: ERC20_ABI,
+              functionName: "transfer",
+              args: [recipient.address as Address, recipient.amountUnits],
+            });
+
+            const challenge = await createContractExecutionChallenge({
+              walletId: arcWallet.id,
+              contractAddress: activeToken.address,
+              callData,
+              feeLevel: CIRCLE_FEE_LEVEL,
+              refId: `${state.referenceId.trim()}-${index + 1}-direct`,
+            });
+
+            const challengeResult = await executeChallenge(challenge.challengeId);
+            const txHash =
+              extractCircleTxHash(challengeResult) ??
+              extractCircleTxHash(challenge.raw);
+            const fallbackReference =
+              extractCircleReference(challengeResult) ??
+              extractCircleReference(challenge.raw) ??
+              challenge.challengeId;
+
+            state.setSubmitState("confirming");
+            state.setSubmitTxHash(txHash ?? fallbackReference);
+            state.setStatusMessage(
+              txHash
+                ? `Waiting for Circle transfer ${index + 1} of ${state.preparedRecipients.length}...`
+                : `Finalizing Circle transfer ${index + 1} of ${state.preparedRecipients.length}...`
+            );
+
+            if (txHash) {
+              await publicClient.waitForTransactionReceipt({
+                hash: txHash,
+                confirmations: 1,
+              });
+            }
+
+            totalDistributed[recipient.targetToken] += recipient.amountUnits;
+            settledRecipients += 1;
+            finalHash = txHash ?? fallbackReference;
+            continue;
+          }
+
+          state.setStatusMessage(
+            `Requesting Circle quote ${index + 1} of ${state.preparedRecipients.length}...`
+          );
+
+          const quote = await getQuote({
+            sourceCurrency: activeToken.symbol,
+            targetCurrency: recipient.targetToken,
+            sourceAmount: recipient.amount,
+            recipientAddress: recipient.address,
+          });
+
+          if (!quote?.typedData) {
+            throw new Error(
+              `Circle did not return tradable typed data for recipient ${index + 1}.`
+            );
+          }
+
+          state.setSubmitState("wallet");
+          state.setStatusMessage(
+            `Sign Circle permit ${index + 1} of ${state.preparedRecipients.length} in your wallet...`
+          );
+
+          const signature = (await walletClient!.request({
+            method: "eth_signTypedData_v4",
+            params: [walletAddress!, JSON.stringify(quote.typedData)],
+          })) as string;
+
+          state.setSubmitState("confirming");
+          state.setStatusMessage(
+            `Submitting Circle trade ${index + 1} of ${state.preparedRecipients.length}...`
+          );
+
+          const initialTrade = await executeFxTrade({
+            quoteId: quote.quoteId,
+            senderAddress: walletAddress!,
+            signature,
+            referenceId: `${state.referenceId.trim()}-${index + 1}`,
+          });
+
+          state.setSubmitTxHash(initialTrade.tradeId);
+          finalHash = initialTrade.tradeId;
+
+          let latestTrade = initialTrade;
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            if (latestTrade.status === "settled") break;
+            if (latestTrade.status === "failed") {
+              throw new Error(`Circle trade ${latestTrade.tradeId} failed.`);
+            }
+
+            state.setStatusMessage(
+              `Waiting for Circle settlement ${index + 1} of ${state.preparedRecipients.length}...`
+            );
+
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+            latestTrade = await getFxTradeStatus(initialTrade.tradeId);
+            finalHash = latestTrade.tradeId;
+          }
+
+          if (latestTrade.status !== "settled") {
+            throw new Error(
+              `Circle trade ${latestTrade.tradeId} did not settle before the timeout window ended.`
+            );
+          }
+
+          totalDistributed[recipient.targetToken] += parseAmountToUnits(
+            latestTrade.targetAmount,
+            targetToken.decimals
+          );
+          settledRecipients += 1;
+        }
+
+        state.setSubmitState("confirmed");
+        state.setStatusMessage(null);
+        state.setSessionTotalAmount((prev) => prev + batchAmount);
+        state.setSessionTotalRecipients((prev) => prev + settledRecipients);
+        state.setSessionTotalDistributed((prev) => ({
+          USDC: prev.USDC + totalDistributed.USDC,
+          EURC: prev.EURC + totalDistributed.EURC,
+        }));
+
+        if (state.currentBatchNumber < state.totalBatches) {
+          toast({
+            title: "Circle settlement complete",
+            description: `Batch ${state.currentBatchNumber} of ${state.totalBatches} settled through Circle StableFX.`,
+          });
+        }
+
+        await Promise.all([
+          refetchAllowance(),
+          refetchBalance(),
+          refetchEngineBalances(),
+        ]);
+
+        return { ok: true, hash: finalHash };
+      } catch (err) {
+        console.error(err);
+        state.setSubmitState("idle");
+        state.setErrorMessage(getFriendlyErrorMessage(err));
+        state.setStatusMessage(null);
+        setEstimatedGas(null);
+        return { ok: false, hash: null };
+      }
+    }
+
+    if (!publicClient) {
+      state.setErrorMessage("Arc public client is not ready yet.");
+      return { ok: false, hash: null };
+    }
+
+    if (!walletAddress) {
+      state.setErrorMessage(
+        "Sign in with your Circle Arc wallet before submitting payroll."
+      );
+      return { ok: false, hash: null };
+    }
+
+    if (!arcWallet?.id) {
+      state.setErrorMessage(
+        "Circle Arc wallet metadata is missing. Refresh the session and try again."
+      );
+      return { ok: false, hash: null };
     }
 
     state.setSubmitState("simulating");
     state.setErrorMessage(null);
     state.setStatusMessage("Building and simulating transaction...");
-
-    // TODO: StableFX Permit2 signing flow
-    // When isStableFxMode is true, the full institutional flow would be:
-    //   1. Call /api/fx/quote with recipientAddress to get a tradable quote + typedData
-    //   2. Prompt user to sign typedData via eth_signTypedData_v4 (Privy/MetaMask)
-    //   3. Call /api/fx/execute with the signature to trigger FxEscrow settlement
-    //   4. FxEscrow pulls source tokens via Permit2 and delivers target tokens
-    // This replaces the on-chain batchRouteAndPay → StableFXAdapter.swap() path.
-    // For now, both modes still use batchRouteAndPay on-chain.
-    // The FxEscrow settlement will be wired once Circle StableFX access is confirmed.
 
     const recipientsArray = state.preparedRecipients.map((r) => r.address as Address);
     const amountsInArray = state.preparedRecipients.map((r) => r.amountUnits);
@@ -270,11 +901,9 @@ export function useWizPayContract({
       const bufferedGas = (gasEstimate * (10000n + GAS_BUFFER_BPS)) / 10000n;
       setEstimatedGas(bufferedGas);
 
-      state.setSubmitState("wallet");
-      state.setStatusMessage("Please confirm the batch transaction in your wallet.");
-
-      const hash = await writeContractAsync({
-        address: WIZPAY_ADDRESS,
+      const referenceId = state.referenceId.trim();
+      const startBlock = await publicClient.getBlockNumber();
+      const callData = encodeFunctionData({
         abi: WIZPAY_ABI,
         functionName: "batchRouteAndPay",
         args: [
@@ -283,19 +912,48 @@ export function useWizPayContract({
           recipientsArray,
           amountsInArray,
           minAmountsOutArray,
-          state.referenceId.trim(),
+          referenceId,
         ],
-        gas: bufferedGas,
       });
 
-      state.setSubmitState("confirming");
-      state.setSubmitTxHash(hash);
-      state.setStatusMessage("Waiting for block confirmation...");
+      state.setSubmitState("wallet");
+      state.setStatusMessage(
+        "Confirm the batch transaction in the Circle wallet window..."
+      );
 
-      await publicClient!.waitForTransactionReceipt({ hash, confirmations: 1 });
+      const challenge = await createContractExecutionChallenge({
+        walletId: arcWallet.id,
+        contractAddress: WIZPAY_ADDRESS,
+        callData,
+        feeLevel: CIRCLE_FEE_LEVEL,
+        refId: referenceId,
+      });
+
+      const challengeResult = await executeChallenge(challenge.challengeId);
+      const txHash =
+        extractCircleTxHash(challengeResult) ??
+        extractCircleTxHash(challenge.raw);
+      const fallbackReference =
+        extractCircleReference(challengeResult) ??
+        extractCircleReference(challenge.raw) ??
+        challenge.challengeId;
+
+      state.setSubmitState("confirming");
+      state.setSubmitTxHash(txHash ?? fallbackReference);
+      state.setStatusMessage(
+        txHash
+          ? "Waiting for Arc confirmation..."
+          : "Waiting for the payroll event to confirm on Arc..."
+      );
+
+      const confirmedHash = await waitForBatchSettlement({
+        startBlock,
+        txHash,
+      });
 
       state.setSubmitState("confirmed");
       state.setStatusMessage(null);
+      state.setSubmitTxHash(confirmedHash ?? txHash ?? fallbackReference);
 
       state.setSessionTotalAmount((prev) => prev + batchAmount);
       state.setSessionTotalRecipients((prev) => prev + validRecipientCount);
@@ -322,12 +980,18 @@ export function useWizPayContract({
         refetchEngineBalances()
       ]);
 
-    } catch (err: any) {
+      return {
+        ok: true,
+        hash: confirmedHash ?? txHash ?? fallbackReference,
+      };
+
+    } catch (err: unknown) {
       console.error(err);
       state.setSubmitState("idle");
       state.setErrorMessage(getFriendlyErrorMessage(err));
       state.setStatusMessage(null);
       setEstimatedGas(null);
+      return { ok: false, hash: null };
     }
   };
 
@@ -351,6 +1015,8 @@ export function useWizPayContract({
     insufficientBalance,
     handleApprove,
     handleSubmit,
+    requestApproval,
+    approvalAmount,
     estimatedGas,
     refetchAllowance,
     refetchBalance,

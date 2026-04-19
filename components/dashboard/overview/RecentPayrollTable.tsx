@@ -43,13 +43,6 @@ import {
 
 const PAGE_SIZE = 10;
 
-function formatDateTime(timestampMs: number) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(timestampMs);
-}
-
 function formatDateShort(timestampMs: number) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
