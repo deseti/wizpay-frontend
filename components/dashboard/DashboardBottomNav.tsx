@@ -2,15 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRightLeft, Coins, LayoutDashboard, Repeat, Route } from "lucide-react";
+import { ArrowRightLeft, Home, Repeat, Route, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabs = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/", label: "Send", icon: ArrowRightLeft },
-  { href: "/liquidity", label: "LP", icon: Coins },
+  { href: "/", label: "Home", icon: Home },
+  { href: "/send", label: "Send", icon: ArrowRightLeft },
   { href: "/swap", label: "Swap", icon: Repeat },
   { href: "/bridge", label: "Bridge", icon: Route },
+  { href: "/assets", label: "Assets", icon: Wallet },
 ];
 
 export function DashboardBottomNav() {
@@ -32,7 +32,7 @@ export function DashboardBottomNav() {
             >
               <div
                 className={cn(
-                  "flex h-10 w-10 items-center justify-center rounded-2xl transition-all duration-300",
+                  "flex h-11 w-11 items-center justify-center rounded-2xl transition-all duration-300",
                   isActive
                     ? "bg-primary/18 text-primary scale-110 shadow-lg shadow-primary/15"
                     : "text-muted-foreground hover:bg-muted/30 hover:text-foreground"

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { usePublicClient, useReadContract } from "wagmi";
 
+import { useActionGuard } from "@/hooks/useActionGuard";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -394,6 +395,8 @@ export function SwapScreen() {
     }
   }
 
+  const { isProcessing: isGuarded, guard } = useActionGuard();
+
   async function handleSwap() {
     if (!canSubmit) {
       setErrorMessage("Connect your Circle Arc wallet and enter a valid swap amount first.");
@@ -522,75 +525,26 @@ export function SwapScreen() {
 
   return (
     <>
-      <div className="animate-fade-up space-y-6">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              Swap
-            </h1>
-            <p className="text-sm text-muted-foreground/70">
-              Real Arc self-swap flow using Circle challenges and the live WizPay routing contract.
-            </p>
-          </div>
+      <div className="animate-fade-up space-y-5">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Swap</h1>
+          <p className="text-sm text-muted-foreground/70">
+            Swap tokens instantly through the WizPay routing engine.
+          </p>
         </div>
 
-        <Card className="glass-card overflow-hidden border-border/40">
-          <CardHeader className="relative overflow-hidden border-b border-border/30 pb-5">
-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/25">
-                <ArrowRightLeft className="h-4.5 w-4.5" />
+        {/* Main Swap Card */}
+        <Card className="glass-card overflow-hidden border-border/40 mx-auto max-w-lg">
+          <CardContent className="space-y-5 py-6">
+            {/* From Token */}
+            <div className="rounded-2xl border border-border/40 bg-background/35 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60">You pay</span>
+                <span className="text-xs text-muted-foreground/50">
+                  Balance: {formatTokenAmount(currentBalance, tokenInConfig.decimals)} {tokenIn}
+                </span>
               </div>
-              Instant Self-Swap
-            </CardTitle>
-            <CardDescription>
-              Approve the input token once, then route a single-recipient `batchRouteAndPay` call back to your own Circle Arc wallet.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
-            <div className="space-y-5">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                    From token
-                  </label>
-                  <Select value={tokenIn} onValueChange={(value) => setTokenIn(value as TokenSymbol)}>
-                    <SelectTrigger className="h-11 border-border/40 bg-background/50">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.values(SUPPORTED_TOKENS).map((token) => (
-                        <SelectItem key={`token-in-${token.symbol}`} value={token.symbol}>
-                          {token.symbol} - {token.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                    To token
-                  </label>
-                  <Select value={tokenOut} onValueChange={(value) => setTokenOut(value as TokenSymbol)}>
-                    <SelectTrigger className="h-11 border-border/40 bg-background/50">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.values(SUPPORTED_TOKENS).map((token) => (
-                        <SelectItem key={`token-out-${token.symbol}`} value={token.symbol}>
-                          {token.symbol} - {token.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                  Amount in
-                </label>
+              <div className="flex items-center gap-3">
                 <Input
                   type="number"
                   inputMode="decimal"
@@ -599,166 +553,149 @@ export function SwapScreen() {
                   placeholder="0.0"
                   value={amountIn}
                   onChange={(event) => setAmountIn(event.target.value)}
-                  className="h-11 border-border/40 bg-background/50"
+                  className="h-12 border-0 bg-transparent text-2xl font-bold placeholder:text-muted-foreground/30 focus-visible:ring-0 p-0 flex-1"
                 />
-              </div>
-
-              {errorMessage ? (
-                <div className="rounded-2xl border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                  {errorMessage}
-                </div>
-              ) : null}
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button
-                  variant="outline"
-                  onClick={handleApprove}
-                  disabled={!canSubmit || !needsApproval || isApproving || isSwapping}
-                  className="h-11 px-5"
-                >
-                  {isApproving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                  {needsApproval ? `Approve ${tokenIn}` : `${tokenIn} Approved`}
-                </Button>
-                <Button
-                  onClick={handleSwap}
-                  disabled={!canSubmit || needsApproval || isSwapping || isApproving}
-                  className="h-11 px-5"
-                >
-                  {isSwapping ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ArrowRightLeft className="h-4 w-4" />}
-                  Swap now
-                </Button>
+                <Select value={tokenIn} onValueChange={(value) => setTokenIn(value as TokenSymbol)}>
+                  <SelectTrigger className="h-10 w-[110px] border-border/40 bg-background/50 rounded-xl">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.values(SUPPORTED_TOKENS).map((token) => (
+                      <SelectItem key={`in-${token.symbol}`} value={token.symbol}>
+                        {token.symbol}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-border/40 bg-background/35 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                  Wallet context
+            {/* Swap Direction Icon */}
+            <div className="flex justify-center -my-2 relative z-10">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border/40 bg-card/80 text-primary shadow-lg">
+                <ArrowRightLeft className="h-4 w-4 rotate-90" />
+              </div>
+            </div>
+
+            {/* To Token */}
+            <div className="rounded-2xl border border-border/40 bg-background/35 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60">You receive</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <p className="text-2xl font-bold flex-1 min-w-0">
+                  {amountInUnits > 0n && tokenIn !== tokenOut && estimatedOutput > 0n
+                    ? formatTokenAmount(estimatedOutput, tokenOutConfig.decimals, 6)
+                    : "0.0"
+                  }
                 </p>
-                <div className="mt-3 flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/12 text-primary">
-                    <Wallet className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <p className="font-mono text-sm font-medium">{shortenAddress(walletAddress)}</p>
-                    <p className="text-xs text-muted-foreground/65">Arc Testnet destination is your own Circle wallet</p>
-                  </div>
+                <Select value={tokenOut} onValueChange={(value) => setTokenOut(value as TokenSymbol)}>
+                  <SelectTrigger className="h-10 w-[110px] border-border/40 bg-background/50 rounded-xl">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.values(SUPPORTED_TOKENS).map((token) => (
+                      <SelectItem key={`out-${token.symbol}`} value={token.symbol}>
+                        {token.symbol}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Quote Details (collapsed) */}
+            {amountInUnits > 0n && tokenIn !== tokenOut && (
+              <div className="rounded-xl border border-border/30 bg-background/20 px-4 py-3 space-y-2 text-sm">
+                <div className="flex justify-between text-muted-foreground/70">
+                  <span>Min. received</span>
+                  <span className="font-mono">{formatTokenAmount(minimumOut, tokenOutConfig.decimals, 6)} {tokenOut}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground/70">
+                  <span>Fee</span>
+                  <span className="font-mono">{formatTokenAmount(estimatedFee, tokenInConfig.decimals, 6)} {tokenIn}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground/70">
+                  <span>Slippage</span>
+                  <span className="font-mono">2%</span>
                 </div>
               </div>
+            )}
 
-              <div className="rounded-2xl border border-border/40 bg-background/35 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                  Live quote
-                </p>
-                {amountInUnits > 0n && tokenIn !== tokenOut ? (
-                  <div className="mt-3 space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Estimated out</span>
-                      <span className="font-mono text-sm font-medium">
-                        {formatTokenAmount(estimatedOutput, tokenOutConfig.decimals, 6)} {tokenOut}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Minimum out</span>
-                      <span className="font-mono text-sm font-medium">
-                        {formatTokenAmount(minimumOut, tokenOutConfig.decimals, 6)} {tokenOut}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Routing fee</span>
-                      <span className="font-mono text-sm font-medium">
-                        {formatTokenAmount(estimatedFee, tokenInConfig.decimals, 6)} {tokenIn}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Est. gas</span>
-                      <span className="font-mono text-sm font-medium">
-                        {estimatedGas ? estimatedGas.toLocaleString("en-US") : "Run swap"}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-muted-foreground/70">
-                    Enter an amount and choose a different token pair to preview the on-chain swap output.
-                  </p>
-                )}
+            {/* Error */}
+            {errorMessage && (
+              <div className="rounded-xl border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive flex items-center justify-between gap-2">
+                <span>{errorMessage}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setErrorMessage(null)}
+                  className="text-destructive hover:text-destructive/80 shrink-0"
+                >
+                  Dismiss
+                </Button>
               </div>
+            )}
 
-              <div className="rounded-2xl border border-border/40 bg-background/35 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                  Execution status
-                </p>
-                <div className="mt-3 space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-muted-foreground/70">Balance</span>
-                    <span className="font-mono text-sm font-medium">
-                      {formatTokenAmount(currentBalance, tokenInConfig.decimals, 6)} {tokenIn}
+            {/* Insufficient balance warning */}
+            {insufficientBalance && amountInUnits > 0n && (
+              <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-300">
+                Insufficient {tokenIn} balance
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="space-y-3">
+              {needsApproval ? (
+                <Button
+                  onClick={handleApprove}
+                  disabled={!canSubmit || isApproving || isSwapping}
+                  className="w-full h-12 text-base glow-btn bg-gradient-to-r from-primary to-violet-500 text-primary-foreground shadow-lg shadow-primary/20"
+                >
+                  {isApproving ? (
+                    <span className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      Approving...
                     </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-muted-foreground/70">Allowance</span>
-                    <span className="font-mono text-sm font-medium">
-                      {formatTokenAmount(currentAllowance, tokenInConfig.decimals, 6)} {tokenIn}
-                    </span>
-                  </div>
-                  {approvalHash ? (
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Approval</span>
-                      <span className="font-mono text-sm font-medium">{shortenHash(approvalHash)}</span>
-                    </div>
-                  ) : null}
-                  {swapHash ? (
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Swap tx</span>
-                      <span className="font-mono text-sm font-medium">{shortenHash(swapHash)}</span>
-                    </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground/70">
-                      No swap submitted yet.
-                    </p>
+                    <>
+                      <ShieldCheck className="h-4 w-4 mr-2" />
+                      Approve {tokenIn}
+                    </>
                   )}
-                </div>
-              </div>
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => void guard(handleSwap)}
+                  disabled={!canSubmit || isSwapping || isApproving || isGuarded}
+                  className="w-full h-12 text-base glow-btn bg-gradient-to-r from-primary to-violet-500 text-primary-foreground shadow-lg shadow-primary/20"
+                >
+                  {isSwapping ? (
+                    <span className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      Swapping...
+                    </span>
+                  ) : (
+                    "Swap"
+                  )}
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card className="glass-card border-border/40">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-primary" />
-                What This Uses
-              </CardTitle>
-              <CardDescription>
-                This screen runs on the same Circle executor stack as payroll.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground/80">
-              <p>Approval is created as a Circle contract-execution challenge against the input token.</p>
-              <p>Swap submission routes one `batchRouteAndPay` call back to your own Arc wallet address.</p>
-              <p>The quote preview comes from on-chain `getEstimatedOutput`, so it stays aligned with the active WizPay engine.</p>
-            </CardContent>
-          </Card>
 
           <Card className="glass-card border-border/40">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <ArrowRightLeft className="h-4 w-4 text-primary" />
-                Constraints
+                Token Pair
               </CardTitle>
-              <CardDescription>
-                Narrow by design to stay consistent with the deployed contracts.
-              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground/80">
-              <p>Only Arc Testnet USDC and EURC are exposed here.</p>
-              <p>This screen performs self-swaps for the active Circle Arc wallet only.</p>
-              <p>If you need multi-recipient routing, stay on the payroll screen.</p>
+            <CardContent className="text-sm text-muted-foreground/80">
+              <p>Only Arc Testnet USDC and EURC are available. For batch routing, use the Send page.</p>
             </CardContent>
           </Card>
         </div>
-      </div>
 
       <Dialog open={isSuccessDialogOpen} onOpenChange={setIsSuccessDialogOpen}>
         <DialogContent className="glass-card max-w-md overflow-hidden border-border/40 bg-background/95 p-0">
@@ -768,9 +705,9 @@ export function SwapScreen() {
               <CheckCircle2 className="h-7 w-7" />
             </div>
             <DialogHeader className="space-y-2">
-              <DialogTitle className="text-xl">Swap submitted successfully</DialogTitle>
+              <DialogTitle className="text-xl">Swap Successful</DialogTitle>
               <DialogDescription>
-                Circle accepted your self-swap on Arc Testnet.
+                Your swap has been confirmed on Arc Testnet.
               </DialogDescription>
             </DialogHeader>
 

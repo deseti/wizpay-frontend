@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { ExternalLink, Search, ChevronLeft, ChevronRight, Clock } from "lucide-react";
+import { ExternalLink, Search, ChevronLeft, ChevronRight, Clock, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -28,8 +26,7 @@ import {
   EXPLORER_BASE_URL,
   formatTokenAmount,
 } from "@/lib/wizpay";
-
-const PAGE_SIZE = 10;
+import { useActivityHistory, type ActivityFilter } from "@/hooks/useActivityHistory";
 
 function formatDateTime(timestampMs: number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -59,6 +56,13 @@ const ACTION_CONFIG: Record<
     className: "bg-amber-500/12 text-amber-300/90 border-amber-500/25",
   },
 };
+
+const FILTER_TABS: { value: ActivityFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "payroll", label: "Payroll" },
+  { value: "add_lp", label: "Add LP" },
+  { value: "remove_lp", label: "Remove LP" },
+];
 
 function getDetailText(item: UnifiedHistoryItem): string {
   if (item.type === "payroll") {
@@ -117,60 +121,75 @@ export function TransactionHistory({
   unifiedHistory,
   isLoading,
 }: TransactionHistoryProps) {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [currentPage, setCurrentPage] = useState(0);
+  const {
+    items: displayItems,
+    totalCount,
+    currentPage,
+    totalPages,
+    filter,
+    searchTerm,
+    setFilter,
+    setSearchTerm,
+    nextPage,
+    prevPage,
+    hasNextPage,
+    hasPrevPage,
+    resetFilters,
+  } = useActivityHistory(unifiedHistory, { pageSize: 10 });
 
-  /* ── Filtering ── */
-  const filtered = useMemo(() => {
-    if (!searchTerm.trim()) return unifiedHistory;
-    const q = searchTerm.toLowerCase();
-    return unifiedHistory.filter((item) => {
-      const ref = getReferenceText(item).toLowerCase();
-      const hash = item.txHash.toLowerCase();
-      const action = ACTION_CONFIG[item.type].label.toLowerCase();
-      return ref.includes(q) || hash.includes(q) || action.includes(q);
-    });
-  }, [unifiedHistory, searchTerm]);
-
-  const isSearching = searchTerm.trim().length > 0;
-  const displayItems = isSearching ? filtered : filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const isFiltered = filter !== "all" || searchTerm.trim().length > 0;
 
   return (
     <Card className="glass-card border-border/40">
-      <CardHeader className="soft-divider border-b border-border/30">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
-                <Clock className="h-3.5 w-3.5" />
-              </div>
-              Live Transaction History
-            </CardTitle>
-            <CardDescription>
-              All on-chain events: payroll batches, LP deposits &amp; withdrawals.
-            </CardDescription>
+      <CardHeader className="space-y-3 border-b border-border/30 pb-4">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <Clock className="h-3.5 w-3.5" />
+            </div>
+            Activity
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {isFiltered && (
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="h-7 gap-1 text-xs text-muted-foreground">
+                <X className="h-3 w-3" /> Clear
+              </Button>
+            )}
+            <Badge variant="outline" className="border-primary/20 text-primary/70 bg-primary/5 text-xs">
+              {totalCount} {filter === "all" ? "events" : ACTION_CONFIG[filter as HistoryActionType]?.label ?? filter}
+            </Badge>
           </div>
-          <Badge variant="outline" className="w-fit border-primary/20 text-primary/70 bg-primary/5">
-            {unifiedHistory.length} events
-          </Badge>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex gap-1 overflow-x-auto pb-0.5">
+          {FILTER_TABS.map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => setFilter(tab.value)}
+              className={`rounded-full px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors ${
+                filter === tab.value
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted/30 text-muted-foreground hover:bg-muted/50"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {/* Search Bar */}
-        <div className="relative mt-2">
+        <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
           <Input
-            placeholder="Search by Reference ID, Tx Hash, or Action..."
+            placeholder="Search by ref ID, tx hash..."
             value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setCurrentPage(0);
-            }}
-            className="h-10 bg-background/50 pl-9 border-border/40"
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="h-9 bg-background/50 pl-9 border-border/40 text-sm"
           />
         </div>
       </CardHeader>
-      <CardContent className="pt-5">
+      <CardContent className="pt-4">
         {isLoading ? (
           /* Skeleton Loading */
           <div className="overflow-hidden rounded-2xl border border-border/40">
@@ -192,13 +211,18 @@ export function TransactionHistory({
         ) : displayItems.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border/40 bg-background/30 p-8 text-center">
             <p className="text-sm font-semibold">
-              {isSearching ? "No matching transactions found" : "No confirmed transactions yet"}
+              {isFiltered ? "No matching transactions found" : "No confirmed transactions yet"}
             </p>
             <p className="mt-1 text-sm text-muted-foreground/70">
-              {isSearching
-                ? "Try a different search term."
+              {isFiltered
+                ? "Try adjusting your filters or search term."
                 : "Once a transaction is confirmed, it will appear here automatically."}
             </p>
+            {isFiltered && (
+              <Button variant="ghost" size="sm" className="mt-3 text-xs" onClick={resetFilters}>
+                Clear filters
+              </Button>
+            )}
           </div>
         ) : (
           <>
@@ -312,28 +336,28 @@ export function TransactionHistory({
               })}
             </div>
 
-            {/* Pagination (only when not searching) */}
-            {!isSearching && totalPages > 1 && (
+            {/* Pagination */}
+            {totalPages > 1 && (
               <div className="mt-4 flex items-center justify-between">
-                <p className="text-sm text-muted-foreground/60">
-                  Page {currentPage + 1} of {totalPages} · {filtered.length} total
+                <p className="text-xs text-muted-foreground/60">
+                  Page {currentPage + 1} of {totalPages} · {totalCount} total
                 </p>
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={currentPage === 0}
-                    onClick={() => setCurrentPage((p) => p - 1)}
+                    disabled={!hasPrevPage}
+                    onClick={prevPage}
                     className="h-8 gap-1 border-border/40 hover:border-primary/20"
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    Previous
+                    Prev
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={currentPage >= totalPages - 1}
-                    onClick={() => setCurrentPage((p) => p + 1)}
+                    disabled={!hasNextPage}
+                    onClick={nextPage}
                     className="h-8 gap-1 border-border/40 hover:border-primary/20"
                   >
                     Next

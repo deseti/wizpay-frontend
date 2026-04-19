@@ -41,6 +41,7 @@ import {
   USDC_ADDRESS,
 } from "@/constants/addresses";
 import { useToast } from "@/hooks/use-toast";
+import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
 import {
   bootstrapCircleTransferWallet,
   createCircleTransfer,
@@ -679,6 +680,7 @@ export function BridgeScreen() {
     requestedAmount <= 0 ||
     walletBalanceAmount >= requestedAmount;
   const isTransferActive = isTrackedTransfer(transfer);
+  const pollTransferFnRef = useRef<(() => Promise<void>) | null>(null);
   const canSubmit =
     Boolean(destinationTokenAddress) &&
     isPositiveDecimal(amount) &&
@@ -737,6 +739,12 @@ export function BridgeScreen() {
     const storedTransfer = getStoredActiveTransfer();
 
     if (!storedTransfer) {
+      return;
+    }
+
+    // Don't restore stale terminal transfers - clear them instead
+    if (storedTransfer.status === "settled" || storedTransfer.status === "failed") {
+      clearStoredActiveTransfer();
       return;
     }
 
@@ -879,6 +887,7 @@ export function BridgeScreen() {
           if (terminalNoticeRef.current !== terminalKey) {
             terminalNoticeRef.current = terminalKey;
             setIsSuccessDialogOpen(true);
+            clearStoredActiveTransfer();
             toast({
               title: "Bridge completed",
               description: `${tokenSymbol} arrived on ${transferDestinationOption.label}.`,
@@ -892,6 +901,7 @@ export function BridgeScreen() {
 
           if (terminalNoticeRef.current !== terminalKey) {
             terminalNoticeRef.current = terminalKey;
+            clearStoredActiveTransfer();
             toast({
               title: "Bridge transfer failed",
               description:
@@ -931,15 +941,12 @@ export function BridgeScreen() {
       }
     }
 
+    pollTransferFnRef.current = pollTransfer;
     void pollTransfer();
-
-    const intervalId = window.setInterval(() => {
-      void pollTransfer();
-    }, BRIDGE_POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      pollTransferFnRef.current = null;
     };
   }, [
     isTrackingUnavailable,
@@ -950,6 +957,14 @@ export function BridgeScreen() {
     transferDestinationOption.label,
     transferSourceOption.label,
   ]);
+
+  useAdaptivePolling({
+    onPoll: () => void pollTransferFnRef.current?.(),
+    activeInterval: BRIDGE_POLL_INTERVAL_MS,
+    idleInterval: 15_000,
+    idleAfter: 60_000,
+    enabled: Boolean(transfer?.transferId) && isTransferActive && !isTrackingUnavailable,
+  });
 
   async function refreshTransferWallet() {
     setIsWalletLoading(true);
@@ -1861,8 +1876,16 @@ export function BridgeScreen() {
                   ) : null}
                 </div>
 
-                <Button className="w-full" onClick={() => setIsSuccessDialogOpen(false)}>
-                  Close
+                <Button className="w-full" onClick={() => {
+                  setIsSuccessDialogOpen(false);
+                  clearStoredActiveTransfer();
+                  setTransfer(null);
+                  setAmount("");
+                  setDestinationAddress("");
+                  setErrorMessage(null);
+                  terminalNoticeRef.current = null;
+                }}>
+                  Start New Bridge
                 </Button>
               </div>
             ) : null}

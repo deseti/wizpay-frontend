@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRightLeft, Coins, LayoutDashboard, Repeat, Route } from "lucide-react";
+import { ArrowRightLeft, Coins, Home, Repeat, Route, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { FaucetButton } from "./FaucetButton";
 
 const navItems = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/", label: "Payroll / Send", icon: ArrowRightLeft },
-  { href: "/liquidity", label: "LP Pool", icon: Coins },
-  { href: "/swap", label: "Swap Kit", icon: Repeat },
+  { href: "/", label: "Home", icon: Home },
+  { href: "/send", label: "Send", icon: ArrowRightLeft },
+  { href: "/swap", label: "Swap", icon: Repeat },
   { href: "/bridge", label: "Bridge", icon: Route },
+  { href: "/assets", label: "Assets", icon: Wallet },
+  { href: "/liquidity", label: "Liquidity", icon: Coins },
 ];
 
 export function DashboardSidebar() {
@@ -42,7 +43,7 @@ export function DashboardSidebar() {
           Live Arc Testnet
         </Badge>
         <p className="mt-1 text-xs text-muted-foreground/70 leading-relaxed font-medium">
-          Mixed-token payroll routing &amp; telemetry.
+          Cross-token payments &amp; Web3 wallet.
         </p>
       </div>
 

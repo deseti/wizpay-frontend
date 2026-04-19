@@ -58,6 +58,7 @@ import {
   type TokenSymbol,
 } from "@/lib/wizpay";
 import { useToast } from "@/hooks/use-toast";
+import { useActionGuard } from "@/hooks/useActionGuard";
 
 interface BatchComposerProps {
   selectedToken: TokenSymbol;
@@ -126,6 +127,7 @@ export function BatchComposer({
   const [csvLoading, setCsvLoading] = useState(false);
   const { toast } = useToast();
   const canSend = smartBatchAvailable && Boolean(handleSmartBatchSubmit);
+  const { isProcessing: isSendGuarded, guard: guardSend } = useActionGuard();
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -746,13 +748,14 @@ export function BatchComposer({
           </Button>
           <Button
             onClick={() => {
-              void handleSmartBatchSubmit?.();
+              void guardSend(() => handleSmartBatchSubmit?.() ?? Promise.resolve());
             }}
             disabled={
               isBusy ||
               smartBatchRunning ||
               insufficientBalance ||
-              !canSend
+              !canSend ||
+              isSendGuarded
             }
             className="h-11 gap-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:brightness-110 shadow-lg shadow-cyan-500/20 transition-all active:scale-[0.97]"
           >
