@@ -10,6 +10,14 @@ import type {
   Transaction,
   Wallet,
 } from "@circle-fin/developer-controlled-wallets";
+import {
+  createPublicClient,
+  defineChain,
+  formatUnits,
+  http,
+  type Address,
+} from "viem";
+import { sepolia } from "viem/chains";
 
 import {
   getWalletByChain,
@@ -160,6 +168,82 @@ const SUPPORTED_BLOCKCHAINS = new Set<CircleTransferBlockchain>([
 const DEFAULT_TOKEN_BY_CHAIN: Record<CircleTransferBlockchain, string> = {
   "ARC-TESTNET": "0x3600000000000000000000000000000000000000",
   "ETH-SEPOLIA": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+};
+
+const ARC_TESTNET_RPC_URL =
+  normalizeOptionalString(process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL) ||
+  "https://rpc.testnet.arc.network";
+const ETHEREUM_SEPOLIA_RPC_URL =
+  normalizeOptionalString(process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL) ||
+  "https://ethereum-sepolia-rpc.publicnode.com";
+
+const arcTestnetPublicChain = defineChain({
+  id: 5_042_002,
+  name: "Arc Testnet",
+  nativeCurrency: {
+    name: "USDC",
+    symbol: "USDC",
+    decimals: 18,
+  },
+  rpcUrls: {
+    default: {
+      http: [ARC_TESTNET_RPC_URL],
+    },
+    public: {
+      http: [ARC_TESTNET_RPC_URL],
+    },
+  },
+  blockExplorers: {
+    default: {
+      name: "ArcScan",
+      url: "https://testnet.arcscan.app",
+    },
+  },
+  testnet: true,
+});
+
+const ethereumSepoliaPublicChain = {
+  ...sepolia,
+  rpcUrls: {
+    ...sepolia.rpcUrls,
+    default: {
+      http: [ETHEREUM_SEPOLIA_RPC_URL],
+    },
+    public: {
+      http: [ETHEREUM_SEPOLIA_RPC_URL],
+    },
+  },
+};
+
+const ERC20_BALANCE_ABI = [
+  {
+    inputs: [{ name: "account", type: "address" }],
+    name: "balanceOf",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "decimals",
+    outputs: [{ name: "", type: "uint8" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+const publicClientsByChain: Record<
+  CircleTransferBlockchain,
+  ReturnType<typeof createPublicClient>
+> = {
+  "ARC-TESTNET": createPublicClient({
+    chain: arcTestnetPublicChain,
+    transport: http(ARC_TESTNET_RPC_URL),
+  }),
+  "ETH-SEPOLIA": createPublicClient({
+    chain: ethereumSepoliaPublicChain,
+    transport: http(ETHEREUM_SEPOLIA_RPC_URL),
+  }),
 };
 
 const DEFAULT_WALLET_SET_NAME = "WizPay Transfer Wallet Set";
@@ -851,11 +935,24 @@ async function buildWalletRecord(
     walletAddress: wallet.walletAddress,
     blockchain: wallet.blockchain,
     tokenAddress,
-    balance: await getWalletBalance(wallet.walletId, tokenAddress),
+    balance: await getWalletBalance(wallet, tokenAddress),
   };
 }
 
 async function getWalletBalance(
+  wallet: ResolvedWalletConfig,
+  tokenAddress: string
+): Promise<CircleTransferWalletBalance | null> {
+  const onchainBalance = await getWalletBalanceFromRpc(wallet, tokenAddress);
+
+  if (onchainBalance) {
+    return onchainBalance;
+  }
+
+  return getWalletBalanceFromCircle(wallet.walletId, tokenAddress);
+}
+
+async function getWalletBalanceFromCircle(
   walletId: string | null,
   tokenAddress: string
 ): Promise<CircleTransferWalletBalance | null> {
@@ -888,6 +985,61 @@ async function getWalletBalance(
   };
 }
 
+async function getWalletBalanceFromRpc(
+  wallet: ResolvedWalletConfig,
+  tokenAddress: string
+): Promise<CircleTransferWalletBalance | null> {
+  try {
+    const publicClient = publicClientsByChain[wallet.blockchain];
+
+    if (isArcNativeUsdcToken(wallet.blockchain, tokenAddress)) {
+      const amount = await publicClient.getBalance({
+        address: wallet.walletAddress as Address,
+      });
+
+      return {
+        amount: formatUnits(amount, 18),
+        symbol: inferTokenSymbol(tokenAddress),
+        tokenAddress,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    const [amount, decimals] = await Promise.all([
+      publicClient.readContract({
+        address: tokenAddress as Address,
+        abi: ERC20_BALANCE_ABI,
+        functionName: "balanceOf",
+        args: [wallet.walletAddress as Address],
+      }),
+      publicClient.readContract({
+        address: tokenAddress as Address,
+        abi: ERC20_BALANCE_ABI,
+        functionName: "decimals",
+      }),
+    ]);
+
+    return {
+      amount: formatUnits(amount, Number(decimals)),
+      symbol: inferTokenSymbol(tokenAddress),
+      tokenAddress,
+      updatedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isArcNativeUsdcToken(
+  blockchain: CircleTransferBlockchain,
+  tokenAddress: string
+) {
+  return (
+    blockchain === "ARC-TESTNET" &&
+    tokenAddress.toLowerCase() === DEFAULT_TOKEN_BY_CHAIN["ARC-TESTNET"].toLowerCase()
+  );
+}
+
 async function assertWalletHasSufficientBalance({
   amount,
   tokenAddress,
@@ -897,11 +1049,7 @@ async function assertWalletHasSufficientBalance({
   tokenAddress: string;
   wallet: ResolvedWalletConfig;
 }): Promise<void> {
-  if (!wallet.walletId) {
-    return;
-  }
-
-  const balance = await getWalletBalance(wallet.walletId, tokenAddress);
+  const balance = await getWalletBalance(wallet, tokenAddress);
   const availableAmount = Number(balance?.amount || "0");
   const requiredAmount = Number(amount);
 

@@ -4,6 +4,7 @@ import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
 import { BridgeKit } from "@circle-fin/bridge-kit";
 import { BridgeChain } from "@circle-fin/bridge-kit/chains";
 
+import { getRedisClient } from "@/lib/redis";
 import {
   CircleTransferError,
   getTransferWallet,
@@ -14,6 +15,13 @@ import {
 type BridgeExecutionResult = Awaited<ReturnType<BridgeKit["bridge"]>>;
 type BridgeExecutionStep = BridgeExecutionResult["steps"][number];
 type CircleBridgeStepId = "burn" | "attestation" | "mint";
+type CircleBridgeTransferStage =
+  | "pending"
+  | "burning"
+  | "attesting"
+  | "minting"
+  | "completed"
+  | "failed";
 
 export interface CircleBridgeStepRecord {
   id: CircleBridgeStepId;
@@ -27,14 +35,21 @@ export interface CircleBridgeStepRecord {
 }
 
 export interface CircleBridgeTransferRecord {
+  id: string;
   transferId: string;
+  stage: CircleBridgeTransferStage;
   status: "pending" | "processing" | "settled" | "failed";
   rawStatus: string;
   txHash: string | null;
+  txHashBurn: string | null;
+  txHashMint: string | null;
+  sourceWalletId: string | null;
   walletId: string | null;
   walletAddress: string | null;
   sourceAddress: string | null;
+  sourceChain: CircleTransferBlockchain;
   sourceBlockchain: CircleTransferBlockchain;
+  destinationChain: CircleTransferBlockchain;
   destinationAddress: string | null;
   amount: string;
   tokenAddress: string;
@@ -66,6 +81,7 @@ interface CircleBridgeConfig {
 
 interface PendingCircleBridgeExecution {
   amount: string;
+  createdAt: string;
   destinationAddress: string;
   destinationBlockchain: CircleTransferBlockchain;
   referenceId: string;
@@ -75,8 +91,13 @@ interface PendingCircleBridgeExecution {
   transferId: string;
 }
 
-const BRIDGE_RESULTS = new Map<string, CircleBridgeTransferRecord>();
-const BRIDGE_EXECUTIONS = new Map<string, Promise<void>>();
+interface QueuedCircleBridgeTransfer {
+  execution: PendingCircleBridgeExecution;
+  record: CircleBridgeTransferRecord;
+}
+
+const BRIDGE_REDIS_KEY_PREFIX = "bridge:";
+const DEFAULT_BRIDGE_REDIS_TTL_SECONDS = 1_800;
 
 const BRIDGE_CHAIN_LABELS: Record<CircleTransferBlockchain, string> = {
   "ARC-TESTNET": "Arc Testnet",
@@ -96,9 +117,9 @@ const USDC_TOKEN_BY_CHAIN: Record<CircleTransferBlockchain, string> = {
   "ETH-SEPOLIA": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
 };
 
-export async function createCircleBridgeTransfer(
+export async function queueCircleBridgeTransfer(
   input: CreateCircleBridgeTransferInput
-): Promise<CircleBridgeTransferRecord> {
+): Promise<QueuedCircleBridgeTransfer> {
   const destinationBlockchain = normalizeBlockchain(input.blockchain);
   const sourceBlockchain = getSourceBlockchain(destinationBlockchain);
 
@@ -165,48 +186,35 @@ export async function createCircleBridgeTransfer(
 
   assertSourceWalletHasSufficientUsdc(sourceWallet, normalizedAmount);
 
-  const transferId = randomUUID();
-  const record = createQueuedTransferRecord({
+  const execution: PendingCircleBridgeExecution = {
     amount: normalizedAmount,
+    createdAt: new Date().toISOString(),
     destinationAddress,
     destinationBlockchain,
     referenceId,
     sourceBlockchain,
     sourceWallet,
     tokenAddress: expectedTokenAddress,
-    transferId,
-  });
+    transferId: randomUUID(),
+  };
+  const record = createQueuedTransferRecord(execution);
 
-  BRIDGE_RESULTS.set(transferId, record);
+  await saveBridgeRecord(record);
 
-  const executionPromise = executeCircleBridgeTransfer({
-    amount: normalizedAmount,
-    destinationAddress,
-    destinationBlockchain,
-    referenceId,
-    sourceBlockchain,
-    sourceWallet,
-    tokenAddress: expectedTokenAddress,
-    transferId,
-  });
-
-  BRIDGE_EXECUTIONS.set(transferId, executionPromise);
-
-  void executionPromise.finally(() => {
-    BRIDGE_EXECUTIONS.delete(transferId);
-  });
-
-  return record;
+  return {
+    execution,
+    record,
+  };
 }
 
 export async function getCircleBridgeStatus(
   transferId: string
 ): Promise<CircleBridgeTransferRecord> {
-  const record = BRIDGE_RESULTS.get(transferId);
+  const record = await getBridgeRecord(transferId);
 
   if (!record) {
     throw new CircleTransferError(
-      `Bridge transfer ${transferId} was not found in the local server session. Submit the bridge again to recreate a live result.`,
+      "Transfer not found or expired",
       404,
       "CIRCLE_BRIDGE_NOT_FOUND"
     );
@@ -215,17 +223,29 @@ export async function getCircleBridgeStatus(
   return record;
 }
 
-async function executeCircleBridgeTransfer(
+export async function runCircleBridgeTransfer(
   input: PendingCircleBridgeExecution
 ) {
   const { adapter, kit, config } = createBridgeRuntime();
+  const fallbackRecord = createQueuedTransferRecord(input);
 
   kit.on("*", (event) => {
     if (!event || typeof event.method !== "string") {
       return;
     }
 
-    applyBridgeEvent(input.transferId, event.method, event.values);
+    void applyBridgeEvent(
+      input.transferId,
+      event.method,
+      event.values,
+      fallbackRecord
+    ).catch((error) => {
+        console.error("Failed to persist Circle bridge event", {
+          error,
+          method: event.method,
+          transferId: input.transferId,
+        });
+      });
   });
 
   const bridgeParams = {
@@ -255,17 +275,17 @@ async function executeCircleBridgeTransfer(
   try {
     const bridgeResult = await kit.bridge(bridgeParams);
 
-    syncBridgeResult(input.transferId, bridgeResult, {
+    await syncBridgeResult(input.transferId, bridgeResult, {
       destinationAddress: input.destinationAddress,
       destinationBlockchain: input.destinationBlockchain,
       referenceId: input.referenceId,
       sourceBlockchain: input.sourceBlockchain,
       sourceWallet: input.sourceWallet,
       transferId: input.transferId,
-    });
+    }, fallbackRecord);
 
     if (bridgeResult.state !== "success") {
-      markBridgeFailure(
+      await markBridgeFailure(
         input.transferId,
         bridgeResultToError(bridgeResult, {
           destinationAddress: input.destinationAddress,
@@ -277,23 +297,37 @@ async function executeCircleBridgeTransfer(
         }),
         bridgeResult.steps,
         input.sourceBlockchain,
-        input.destinationBlockchain
+        input.destinationBlockchain,
+        fallbackRecord
       );
 
       return;
     }
 
-    updateBridgeRecord(input.transferId, (record) => ({
-      ...record,
-      status: "settled",
-      rawStatus: "completed",
-      txHash: getLatestTxHash(bridgeResult.steps) || record.txHash,
-      errorReason: null,
-      provider: bridgeResult.provider || record.provider,
-      updatedAt: new Date().toISOString(),
-    }));
+    await updateBridgeRecord(
+      input.transferId,
+      (record) => ({
+        ...record,
+        stage: "completed",
+        status: "settled",
+        rawStatus: "completed",
+        txHash: getLatestTxHash(bridgeResult.steps) || record.txHash,
+        txHashBurn:
+          getExecutionStepTxHash(bridgeResult.steps, "burn") ||
+          getRecordedStepTxHash(record.steps, "burn") ||
+          record.txHashBurn,
+        txHashMint:
+          getExecutionStepTxHash(bridgeResult.steps, "mint") ||
+          getRecordedStepTxHash(record.steps, "mint") ||
+          record.txHashMint,
+        errorReason: null,
+        provider: bridgeResult.provider || record.provider,
+        updatedAt: new Date().toISOString(),
+      }),
+      fallbackRecord
+    );
   } catch (error) {
-    markBridgeFailure(
+    await markBridgeFailure(
       input.transferId,
       toCircleBridgeError(error, {
         destinationAddress: input.destinationAddress,
@@ -303,7 +337,8 @@ async function executeCircleBridgeTransfer(
       }),
       [],
       input.sourceBlockchain,
-      input.destinationBlockchain
+      input.destinationBlockchain,
+      fallbackRecord
     );
   }
 }
@@ -311,17 +346,24 @@ async function executeCircleBridgeTransfer(
 function createQueuedTransferRecord(
   input: PendingCircleBridgeExecution
 ): CircleBridgeTransferRecord {
-  const createdAt = new Date().toISOString();
+  const createdAt = input.createdAt;
 
   return {
+    id: input.transferId,
     transferId: input.transferId,
+    stage: "pending",
     status: "pending",
     rawStatus: "queued",
     txHash: null,
+    txHashBurn: null,
+    txHashMint: null,
+    sourceWalletId: input.sourceWallet.walletId,
     walletId: input.sourceWallet.walletId,
     walletAddress: input.sourceWallet.walletAddress,
     sourceAddress: input.sourceWallet.walletAddress,
+    sourceChain: input.sourceBlockchain,
     sourceBlockchain: input.sourceBlockchain,
+    destinationChain: input.destinationBlockchain,
     destinationAddress: input.destinationAddress,
     amount: input.amount,
     tokenAddress: input.tokenAddress,
@@ -370,10 +412,11 @@ function createInitialBridgeSteps(
   ];
 }
 
-function applyBridgeEvent(
+async function applyBridgeEvent(
   transferId: string,
   method: string,
-  values: unknown
+  values: unknown,
+  fallbackRecord: CircleBridgeTransferRecord
 ) {
   const stepId = getBridgeEventStepId(method);
 
@@ -387,23 +430,38 @@ function applyBridgeEvent(
     null;
   const explorerUrl = getStringField(values, "explorerUrl") || null;
 
-  updateBridgeRecord(transferId, (record) => ({
-    ...record,
-    status: stepId === "mint" ? "settled" : "processing",
-    rawStatus: getRawStatusForStep(stepId),
-    txHash: txHash || record.txHash,
-    errorReason: null,
-    updatedAt: new Date().toISOString(),
-    steps: updateBridgeSteps(record.steps, stepId, {
-      state: "success",
-      txHash,
-      explorerUrl,
-      errorMessage: null,
-    }),
-  }));
+  await updateBridgeRecord(
+    transferId,
+    (record) => {
+      if (record.status === "failed" || record.status === "settled") {
+        return record;
+      }
+
+      return {
+        ...record,
+        stage: getBridgeStageForStep(stepId),
+        status: "processing",
+        rawStatus: getRawStatusForEventStep(stepId),
+        txHash: txHash || record.txHash,
+        txHashBurn:
+          stepId === "burn" ? txHash || record.txHashBurn : record.txHashBurn,
+        txHashMint:
+          stepId === "mint" ? txHash || record.txHashMint : record.txHashMint,
+        errorReason: null,
+        updatedAt: new Date().toISOString(),
+        steps: updateBridgeSteps(record.steps, stepId, {
+          state: "success",
+          txHash,
+          explorerUrl,
+          errorMessage: null,
+        }),
+      };
+    },
+    fallbackRecord
+  );
 }
 
-function syncBridgeResult(
+async function syncBridgeResult(
   transferId: string,
   bridgeResult: BridgeExecutionResult,
   context: {
@@ -413,82 +471,206 @@ function syncBridgeResult(
     sourceBlockchain: CircleTransferBlockchain;
     sourceWallet: CircleTransferWallet;
     transferId: string;
-  }
+  },
+  fallbackRecord: CircleBridgeTransferRecord
 ) {
-  updateBridgeRecord(transferId, (record) => {
-    const nextSteps = mergeBridgeExecutionSteps(
-      record.steps,
-      bridgeResult.steps,
-      context.sourceBlockchain,
-      context.destinationBlockchain
-    );
+  await updateBridgeRecord(
+    transferId,
+    (record) => {
+      const nextSteps = mergeBridgeExecutionSteps(
+        record.steps,
+        bridgeResult.steps,
+        context.sourceBlockchain,
+        context.destinationBlockchain
+      );
 
-    return {
-      ...record,
-      provider: bridgeResult.provider || record.provider,
-      status:
-        bridgeResult.state === "success"
-          ? "settled"
-          : deriveTransferStatus(nextSteps),
-      rawStatus:
-        bridgeResult.state === "success"
-          ? "completed"
-          : getRawStatusFromSteps(nextSteps, record.rawStatus),
-      txHash:
-        getLatestTxHash(bridgeResult.steps) ||
-        getLatestRecordedStepTxHash(nextSteps) ||
-        record.txHash,
-      updatedAt: new Date().toISOString(),
-      steps: nextSteps,
-    };
-  });
+      return {
+        ...record,
+        provider: bridgeResult.provider || record.provider,
+        stage:
+          bridgeResult.state === "success"
+            ? "completed"
+            : getBridgeStageFromSteps(nextSteps, record.stage),
+        status:
+          bridgeResult.state === "success"
+            ? "settled"
+            : deriveTransferStatus(nextSteps),
+        rawStatus:
+          bridgeResult.state === "success"
+            ? "completed"
+            : getRawStatusFromSteps(nextSteps, record.rawStatus),
+        txHash:
+          getLatestTxHash(bridgeResult.steps) ||
+          getLatestRecordedStepTxHash(nextSteps) ||
+          record.txHash,
+        txHashBurn:
+          getExecutionStepTxHash(bridgeResult.steps, "burn") ||
+          getRecordedStepTxHash(nextSteps, "burn") ||
+          record.txHashBurn,
+        txHashMint:
+          getExecutionStepTxHash(bridgeResult.steps, "mint") ||
+          getRecordedStepTxHash(nextSteps, "mint") ||
+          record.txHashMint,
+        updatedAt: new Date().toISOString(),
+        steps: nextSteps,
+      };
+    },
+    fallbackRecord
+  );
 }
 
-function markBridgeFailure(
+async function markBridgeFailure(
   transferId: string,
   error: CircleTransferError,
   bridgeSteps: BridgeExecutionStep[],
   sourceBlockchain: CircleTransferBlockchain,
-  destinationBlockchain: CircleTransferBlockchain
+  destinationBlockchain: CircleTransferBlockchain,
+  fallbackRecord: CircleBridgeTransferRecord
 ) {
-  updateBridgeRecord(transferId, (record) => {
-    let nextSteps = record.steps;
+  await updateBridgeRecord(
+    transferId,
+    (record) => {
+      let nextSteps = record.steps;
 
-    if (bridgeSteps.length > 0) {
-      nextSteps = mergeBridgeExecutionSteps(
-        record.steps,
-        bridgeSteps,
-        sourceBlockchain,
-        destinationBlockchain
-      );
-    }
+      if (bridgeSteps.length > 0) {
+        nextSteps = mergeBridgeExecutionSteps(
+          record.steps,
+          bridgeSteps,
+          sourceBlockchain,
+          destinationBlockchain
+        );
+      }
 
-    if (!nextSteps.some((step) => step.state === "error")) {
-      nextSteps = markPendingBridgeStepError(nextSteps, error.message);
-    }
+      if (!nextSteps.some((step) => step.state === "error")) {
+        nextSteps = markPendingBridgeStepError(nextSteps, error.message);
+      }
 
-    return {
-      ...record,
-      status: "failed",
-      rawStatus: "failed",
-      errorReason: error.message,
-      updatedAt: new Date().toISOString(),
-      steps: nextSteps,
-    };
-  });
+      return {
+        ...record,
+        stage: "failed",
+        status: "failed",
+        rawStatus: "failed",
+        txHashBurn:
+          getExecutionStepTxHash(bridgeSteps, "burn") ||
+          getRecordedStepTxHash(nextSteps, "burn") ||
+          record.txHashBurn,
+        txHashMint:
+          getExecutionStepTxHash(bridgeSteps, "mint") ||
+          getRecordedStepTxHash(nextSteps, "mint") ||
+          record.txHashMint,
+        errorReason: error.message,
+        updatedAt: new Date().toISOString(),
+        steps: nextSteps,
+      };
+    },
+    fallbackRecord
+  );
 }
 
-function updateBridgeRecord(
+async function updateBridgeRecord(
   transferId: string,
-  updater: (record: CircleBridgeTransferRecord) => CircleBridgeTransferRecord
+  updater: (record: CircleBridgeTransferRecord) => CircleBridgeTransferRecord,
+  fallbackRecord?: CircleBridgeTransferRecord
 ) {
-  const currentRecord = BRIDGE_RESULTS.get(transferId);
+  const currentRecord =
+    (await getBridgeRecord(transferId)) || fallbackRecord || null;
 
   if (!currentRecord) {
     return;
   }
 
-  BRIDGE_RESULTS.set(transferId, updater(currentRecord));
+  await saveBridgeRecord(updater(currentRecord));
+}
+
+async function getBridgeRecord(
+  transferId: string
+): Promise<CircleBridgeTransferRecord | null> {
+  try {
+    const payload = await getBridgeRedisClient().get<
+      CircleBridgeTransferRecord | string
+    >(
+      getBridgeRedisKey(transferId)
+    );
+
+    if (!payload) {
+      return null;
+    }
+
+    return deserializeBridgeRecord(payload);
+  } catch (error) {
+    throw toBridgeStorageError(error, "load", transferId);
+  }
+}
+
+async function saveBridgeRecord(record: CircleBridgeTransferRecord) {
+  try {
+    await getBridgeRedisClient().set(
+      getBridgeRedisKey(record.transferId),
+      JSON.stringify(record),
+      { ex: getBridgeRedisTtlSeconds() }
+    );
+  } catch (error) {
+    throw toBridgeStorageError(error, "persist", record.transferId);
+  }
+}
+
+function getBridgeRedisClient() {
+  try {
+    return getRedisClient();
+  } catch {
+    throw new CircleTransferError(
+      "Upstash Redis is not configured for bridge state persistence. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.",
+      503,
+      "CIRCLE_BRIDGE_REDIS_CONFIG_MISSING"
+    );
+  }
+}
+
+function getBridgeRedisKey(transferId: string) {
+  return `${BRIDGE_REDIS_KEY_PREFIX}${transferId}`;
+}
+
+function getBridgeRedisTtlSeconds() {
+  const configuredTtl = Number.parseInt(
+    process.env.CIRCLE_BRIDGE_TRANSFER_TTL_SECONDS || "",
+    10
+  );
+
+  if (Number.isFinite(configuredTtl) && configuredTtl > 0) {
+    return configuredTtl;
+  }
+
+  return DEFAULT_BRIDGE_REDIS_TTL_SECONDS;
+}
+
+function toBridgeStorageError(
+  error: unknown,
+  action: "load" | "persist",
+  transferId?: string
+) {
+  if (error instanceof CircleTransferError) {
+    return error;
+  }
+
+  return new CircleTransferError(
+    `Failed to ${action} bridge transfer state in Redis.`,
+    503,
+    "CIRCLE_BRIDGE_STORAGE_UNAVAILABLE",
+    {
+      ...(transferId ? { transferId } : {}),
+      message: error instanceof Error ? error.message : String(error),
+    }
+  );
+}
+
+function deserializeBridgeRecord(
+  payload: CircleBridgeTransferRecord | string
+): CircleBridgeTransferRecord {
+  if (typeof payload === "string") {
+    return JSON.parse(payload) as CircleBridgeTransferRecord;
+  }
+
+  return payload;
 }
 
 function createBridgeRuntime() {
@@ -709,6 +891,36 @@ function getLatestRecordedStepTxHash(
   return null;
 }
 
+function getExecutionStepTxHash(
+  steps: BridgeExecutionStep[],
+  stepId: CircleBridgeStepId
+) {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+
+    if (getBridgeExecutionStepId(step) === stepId && step.txHash) {
+      return step.txHash;
+    }
+  }
+
+  return null;
+}
+
+function getRecordedStepTxHash(
+  steps: CircleBridgeStepRecord[],
+  stepId: CircleBridgeStepId
+) {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+
+    if (step?.id === stepId && step.txHash) {
+      return step.txHash;
+    }
+  }
+
+  return null;
+}
+
 function getBridgeEventStepId(method: string): CircleBridgeStepId | null {
   const normalizedMethod = method.trim().toLowerCase();
 
@@ -765,6 +977,47 @@ function getBridgeStepName(
   }
 
   return "Waiting for Circle attestation";
+}
+
+function getBridgeStageForStep(stepId: CircleBridgeStepId): CircleBridgeTransferStage {
+  if (stepId === "burn") {
+    return "attesting";
+  }
+
+  if (stepId === "attestation") {
+    return "minting";
+  }
+
+  return "completed";
+}
+
+function getBridgeStageFromSteps(
+  steps: CircleBridgeStepRecord[],
+  fallbackStage: CircleBridgeTransferStage
+) {
+  if (steps.some((step) => step.state === "error")) {
+    return "failed";
+  }
+
+  const mintStep = steps.find((step) => step.id === "mint");
+
+  if (mintStep?.state === "success") {
+    return "completed";
+  }
+
+  const attestationStep = steps.find((step) => step.id === "attestation");
+
+  if (attestationStep?.state === "success") {
+    return "minting";
+  }
+
+  const burnStep = steps.find((step) => step.id === "burn");
+
+  if (burnStep?.state === "success") {
+    return "attesting";
+  }
+
+  return fallbackStage;
 }
 
 function mergeBridgeExecutionSteps(
@@ -852,6 +1105,14 @@ function getRawStatusForStep(stepId: CircleBridgeStepId) {
   }
 
   return "burned";
+}
+
+function getRawStatusForEventStep(stepId: CircleBridgeStepId) {
+  if (stepId === "mint") {
+    return "minting";
+  }
+
+  return getRawStatusForStep(stepId);
 }
 
 function getRawStatusFromSteps(

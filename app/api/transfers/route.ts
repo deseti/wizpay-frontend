@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import {
   CircleTransferError,
   type CircleTransferBlockchain,
 } from "@/lib/server/circle-transfer";
-import { createCircleBridgeTransfer } from "@/lib/server/circle-bridge";
+import {
+  queueCircleBridgeTransfer,
+  runCircleBridgeTransfer,
+} from "@/lib/server/circle-bridge";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,7 +39,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const transfer = await createCircleBridgeTransfer({
+    const { execution, record } = await queueCircleBridgeTransfer({
       destinationAddress,
       amount,
       referenceId,
@@ -46,7 +49,18 @@ export async function POST(request: Request) {
       blockchain,
     });
 
-    return NextResponse.json({ data: transfer }, { status: 202 });
+    after(async () => {
+      try {
+        await runCircleBridgeTransfer(execution);
+      } catch (error) {
+        console.error("Circle bridge background execution failed", {
+          error,
+          transferId: execution.transferId,
+        });
+      }
+    });
+
+    return NextResponse.json({ data: record }, { status: 202 });
   } catch (error) {
     return toErrorResponse(error);
   }

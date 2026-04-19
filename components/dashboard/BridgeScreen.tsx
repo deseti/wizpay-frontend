@@ -59,6 +59,7 @@ const BRIDGE_POLL_INTERVAL_MS = 4_000;
 const BRIDGE_LONG_RUNNING_MS = 120_000;
 const BRIDGE_ESTIMATED_TIME_LABEL = "30-90 seconds";
 const STEP_ORDER = ["burn", "attestation", "mint"] as const;
+const DEFAULT_SOURCE_BLOCKCHAIN: CircleTransferBlockchain = "ETH-SEPOLIA";
 
 type BridgeStepId = (typeof STEP_ORDER)[number];
 type StoredTransferWallet = {
@@ -84,8 +85,8 @@ const DESTINATION_OPTIONS: Array<{
   },
 ];
 
-const APP_TREASURY_WALLET_TITLE = "App Treasury Wallet";
-const APP_TREASURY_WALLET_LABEL = "app treasury wallet";
+const APP_TREASURY_WALLET_TITLE = "Source Treasury Wallet";
+const APP_TREASURY_WALLET_LABEL = "source treasury wallet";
 const BRIDGE_ASSET_SYMBOL = "USDC";
 
 const USDC_ADDRESS_BY_CHAIN: Record<CircleTransferBlockchain, string> = {
@@ -100,10 +101,10 @@ function getOptionByChain(chain: CircleTransferBlockchain) {
   );
 }
 
-function getSourceBlockchain(
-  destinationChain: CircleTransferBlockchain
+function getOppositeBlockchain(
+  blockchain: CircleTransferBlockchain
 ): CircleTransferBlockchain {
-  return destinationChain === "ARC-TESTNET" ? "ETH-SEPOLIA" : "ARC-TESTNET";
+  return blockchain === "ARC-TESTNET" ? "ETH-SEPOLIA" : "ARC-TESTNET";
 }
 
 function normalizeBridgeStepId(value: string | undefined): BridgeStepId | null {
@@ -354,6 +355,14 @@ function getBridgeErrorMessage(
     return "The last bridge session is no longer available on this server. Start a new bridge to resume live tracking.";
   }
 
+  if (transferError?.code === "CIRCLE_BRIDGE_STORAGE_UNAVAILABLE") {
+    return "Live bridge tracking is temporarily unavailable because Redis could not be read. The last known progress stays on screen and the bridge may still continue on-chain.";
+  }
+
+  if (transferError?.code === "CIRCLE_BRIDGE_REDIS_CONFIG_MISSING") {
+    return "Live bridge tracking is unavailable because Redis is not configured on the server. The bridge may still continue on-chain, but automatic status updates are disabled.";
+  }
+
   if (transferError?.code === "CIRCLE_BRIDGE_EXECUTION_FAILED") {
     const failedStep =
       details &&
@@ -504,7 +513,11 @@ function getTransferHeadline(
   }
 
   if (transfer.rawStatus === "attested") {
-    return "Circle attestation received";
+    return "Attestation received, mint is next";
+  }
+
+  if (transfer.rawStatus === "burned") {
+    return "Burn confirmed, waiting for attestation";
   }
 
   return currentStepName || "Bridge submitted";
@@ -520,11 +533,11 @@ function getTransferStatusLabel(transfer: CircleTransfer) {
   }
 
   if (transfer.rawStatus === "attested") {
-    return "Attested";
+    return "Minting";
   }
 
   if (transfer.rawStatus === "burned") {
-    return "Burn confirmed";
+    return "Awaiting attestation";
   }
 
   return transfer.status === "processing" ? "Processing" : "Queued";
@@ -580,14 +593,43 @@ function getLastUpdatedLabel(timestamp: string) {
   }).format(new Date(timestamp));
 }
 
+function getLongRunningTransferMessage(
+  transfer: CircleTransfer,
+  currentStepId: BridgeStepId | null,
+  labels: {
+    destinationLabel: string;
+    sourceLabel: string;
+  }
+) {
+  if (transfer.status === "pending" && transfer.rawStatus === "queued") {
+    return "This bridge has stayed queued longer than expected. If the source wallet balance already changed, this is likely an older tracking record that stopped updating before the latest Redis fix.";
+  }
+
+  if (transfer.rawStatus === "attested" || currentStepId === "mint") {
+    return `Circle attestation is done. Mint is pending on ${labels.destinationLabel}. This last step can still take a few more minutes on testnet.`;
+  }
+
+  if (transfer.rawStatus === "burned" || currentStepId === "attestation") {
+    return `Burn is already confirmed on ${labels.sourceLabel}. Circle is now waiting to issue the CCTP attestation before minting on ${labels.destinationLabel}. Testnet attestation can take several minutes.`;
+  }
+
+  if (currentStepId === "burn") {
+    return `The source-chain burn is still being finalized on ${labels.sourceLabel}. After that, Circle will wait for attestation and then mint on ${labels.destinationLabel}.`;
+  }
+
+  return "Still processing on-chain. You can check back later.";
+}
+
 export function BridgeScreen() {
   const { arcWallet, sepoliaWallet } = useCircleWallet();
   const { toast } = useToast();
   const restoredTransferRef = useRef(false);
+  const normalizedLegacyDefaultRef = useRef(false);
   const terminalNoticeRef = useRef<string | null>(null);
 
-  const [destinationChain, setDestinationChain] =
-    useState<CircleTransferBlockchain>("ETH-SEPOLIA");
+  const [destinationChain, setDestinationChain] = useState<CircleTransferBlockchain>(
+    getOppositeBlockchain(DEFAULT_SOURCE_BLOCKCHAIN)
+  );
   const [amount, setAmount] = useState("");
   const [destinationAddress, setDestinationAddress] = useState("");
   const [transfer, setTransfer] = useState<CircleTransfer | null>(null);
@@ -598,6 +640,7 @@ export function BridgeScreen() {
   const [isWalletLoading, setIsWalletLoading] = useState(false);
   const [isWalletBootstrapping, setIsWalletBootstrapping] = useState(false);
   const [isPollingTransfer, setIsPollingTransfer] = useState(false);
+  const [isTrackingUnavailable, setIsTrackingUnavailable] = useState(false);
   const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false);
   const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
   const tokenSymbol = BRIDGE_ASSET_SYMBOL;
@@ -606,7 +649,7 @@ export function BridgeScreen() {
     () => getOptionByChain(destinationChain),
     [destinationChain]
   );
-  const sourceChain = getSourceBlockchain(destinationChain);
+  const sourceChain = getOppositeBlockchain(destinationChain);
   const sourceOption = useMemo(() => getOptionByChain(sourceChain), [sourceChain]);
   const treasuryWalletOption = useMemo(
     () =>
@@ -668,6 +711,21 @@ export function BridgeScreen() {
       isTransferActive &&
       Date.now() - new Date(transfer.createdAt).getTime() > BRIDGE_LONG_RUNNING_MS
   );
+  const longRunningTransferMessage = useMemo(
+    () =>
+      transfer
+        ? getLongRunningTransferMessage(transfer, currentStepId, {
+            destinationLabel: transferDestinationOption.label,
+            sourceLabel: transferSourceOption.label,
+          })
+        : null,
+    [
+      currentStepId,
+      transfer,
+      transferDestinationOption.label,
+      transferSourceOption.label,
+    ]
+  );
 
   useEffect(() => {
     if (restoredTransferRef.current) {
@@ -687,6 +745,26 @@ export function BridgeScreen() {
     setAmount(storedTransfer.amount);
     setDestinationAddress(storedTransfer.destinationAddress || "");
   }, []);
+
+  useEffect(() => {
+    if (normalizedLegacyDefaultRef.current) {
+      return;
+    }
+
+    if (!restoredTransferRef.current) {
+      return;
+    }
+
+    normalizedLegacyDefaultRef.current = true;
+
+    if (transfer || getStoredActiveTransfer()) {
+      return;
+    }
+
+    if (destinationChain === "ETH-SEPOLIA") {
+      setDestinationChain(getOppositeBlockchain(DEFAULT_SOURCE_BLOCKCHAIN));
+    }
+  }, [destinationChain, transfer]);
 
   useEffect(() => {
     if (isTransferActive) {
@@ -772,7 +850,7 @@ export function BridgeScreen() {
   }, [transfer]);
 
   useEffect(() => {
-    if (!transfer?.transferId || !isTransferActive) {
+    if (!transfer?.transferId || !isTransferActive || isTrackingUnavailable) {
       setIsPollingTransfer(false);
       return;
     }
@@ -792,6 +870,7 @@ export function BridgeScreen() {
 
         setTransfer(latestTransfer);
         setStoredActiveTransfer(latestTransfer);
+        setIsTrackingUnavailable(false);
         setErrorMessage(null);
 
         if (latestTransfer.status === "settled") {
@@ -832,10 +911,9 @@ export function BridgeScreen() {
           error instanceof TransferApiError &&
           error.code === "CIRCLE_BRIDGE_NOT_FOUND"
         ) {
-          clearStoredActiveTransfer();
-          setTransfer(null);
+          setIsTrackingUnavailable(true);
           setErrorMessage(
-            "The previous bridge is still processing on-chain, but this browser can no longer track the original server session. Start a new bridge if you need fresh tracking."
+            "Live Redis tracking for this bridge is no longer available. The last known progress stays visible here, but automatic updates have stopped."
           );
           return;
         }
@@ -864,6 +942,7 @@ export function BridgeScreen() {
       window.clearInterval(intervalId);
     };
   }, [
+    isTrackingUnavailable,
     isTransferActive,
     toast,
     tokenSymbol,
@@ -1012,6 +1091,7 @@ export function BridgeScreen() {
     setErrorMessage(null);
     setIsReviewDialogOpen(false);
     setIsSuccessDialogOpen(false);
+    setIsTrackingUnavailable(false);
 
     try {
       const referenceId = `BRIDGE-${destinationChain}-${Date.now()}`;
@@ -1075,8 +1155,8 @@ export function BridgeScreen() {
             Treasury-Assisted Bridge
           </CardTitle>
           <CardDescription>
-            Burns USDC from the app treasury wallet on the source network and
-            mints it to the destination address you choose.
+            Choose the source network for the treasury wallet. Circle burns on
+            that chain first, then mints on the opposite destination network.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
@@ -1087,8 +1167,8 @@ export function BridgeScreen() {
               </p>
               <p className="mt-2 text-sm text-muted-foreground/80">
                 This bridge uses an app-owned Circle developer-controlled wallet
-                on the source network. It is not your personal wallet, and only
-                USDC is supported in this flow.
+                on the selected source network. It is not your personal wallet,
+                and only USDC is supported in this flow.
               </p>
             </div>
 
@@ -1127,7 +1207,16 @@ export function BridgeScreen() {
 
                 {shouldShowLongRunningMessage ? (
                   <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-                    Still processing on-chain. You can check back later.
+                    {longRunningTransferMessage}
+                  </div>
+                ) : null}
+
+                {isTrackingUnavailable ? (
+                  <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                    Redis tracking expired or was removed, so live polling has
+                    stopped. The last known burn, attestation, and mint status
+                    remains visible here while the bridge may still continue
+                    on-chain.
                   </div>
                 ) : null}
 
@@ -1241,12 +1330,14 @@ export function BridgeScreen() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                  Destination network
+                  Source network
                 </label>
                 <Select
-                  value={destinationChain}
+                  value={sourceChain}
                   onValueChange={(value) =>
-                    setDestinationChain(value as CircleTransferBlockchain)
+                    setDestinationChain(
+                      getOppositeBlockchain(value as CircleTransferBlockchain)
+                    )
                   }
                   disabled={isTransferActive || isSubmitting}
                 >
@@ -1265,12 +1356,17 @@ export function BridgeScreen() {
 
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                  Source network
+                  Destination network
                 </label>
                 <div className="flex h-11 items-center rounded-md border border-border/40 bg-background/50 px-3 text-sm font-medium">
-                  {sourceOption.label} · App treasury · USDC only
+                  {destinationOption.label} · Recipient wallet
                 </div>
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-border/30 bg-background/35 px-4 py-3 text-sm text-muted-foreground/80">
+              Route: burn from the {sourceOption.label} source treasury wallet,
+              then mint to your destination address on {destinationOption.label}.
             </div>
 
             <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
@@ -1313,8 +1409,9 @@ export function BridgeScreen() {
 
             {transferWallet && treasuryWalletEmpty && !isPositiveDecimal(amount) ? (
               <div className="rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-                Bridge requires USDC in the app treasury wallet. Please fund this
-                wallet before bridging.
+                Bridge requires USDC in the selected {sourceOption.label} source
+                treasury wallet. If your funded wallet is on the other network,
+                switch the source network above before bridging.
               </div>
             ) : null}
 
@@ -1333,9 +1430,9 @@ export function BridgeScreen() {
             <div className="space-y-3">
               <div className="rounded-2xl border border-border/30 bg-background/40 px-4 py-3 text-sm text-muted-foreground/80">
                 No Circle wallet popup appears in this flow. The bridge is
-                executed by the app treasury wallet on the backend, so your
-                confirmation happens in-app instead of through the Circle wallet
-                signer.
+                executed by the selected source treasury wallet on the backend,
+                so your confirmation happens in-app instead of through the Circle
+                wallet signer.
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -1374,8 +1471,8 @@ export function BridgeScreen() {
                     {APP_TREASURY_WALLET_TITLE}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground/70">
-                    App-owned Circle developer-controlled wallet. This is not your
-                    personal wallet.
+                    App-owned Circle developer-controlled wallet on the selected
+                    source network. This is not your personal wallet.
                   </p>
                 </div>
                 {isWalletLoading || isWalletBootstrapping ? (
@@ -1623,9 +1720,9 @@ export function BridgeScreen() {
             <DialogHeader className="space-y-2">
               <DialogTitle className="text-xl">Review bridge transfer</DialogTitle>
               <DialogDescription>
-                This bridge uses the app treasury wallet on the backend, so no
-                Circle wallet signature popup will appear from your personal
-                wallet.
+                This bridge uses the selected source treasury wallet on the
+                backend, so no Circle wallet signature popup will appear from
+                your personal wallet.
               </DialogDescription>
             </DialogHeader>
 
@@ -1650,7 +1747,9 @@ export function BridgeScreen() {
                   </span>
                 </div>
                 <div className="mt-3 flex items-start justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground/70">Treasury wallet</span>
+                  <span className="text-muted-foreground/70">
+                    Source treasury wallet
+                  </span>
                   <span className="max-w-[12rem] break-all text-right font-mono font-medium">
                     {transferWallet?.walletAddress || "Unavailable"}
                   </span>

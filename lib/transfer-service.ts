@@ -10,14 +10,27 @@ export interface CircleTransferStep {
 }
 
 export interface CircleTransfer {
+  id?: string;
+  stage?:
+    | "pending"
+    | "burning"
+    | "attesting"
+    | "minting"
+    | "completed"
+    | "failed";
   transferId: string;
   status: "pending" | "processing" | "settled" | "failed";
   rawStatus: string;
   txHash: string | null;
+  txHashBurn?: string | null;
+  txHashMint?: string | null;
+  sourceWalletId?: string | null;
   walletId: string | null;
   walletAddress: string | null;
   sourceAddress: string | null;
+  sourceChain?: CircleTransferBlockchain;
   sourceBlockchain: CircleTransferBlockchain;
+  destinationChain?: CircleTransferBlockchain;
   destinationAddress: string | null;
   amount: string;
   tokenAddress: string;
