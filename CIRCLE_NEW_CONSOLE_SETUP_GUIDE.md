@@ -171,9 +171,12 @@ CIRCLE_TRANSFER_TOKEN_ADDRESS=
 CIRCLE_TRANSFER_FEE_LEVEL=MEDIUM
 CIRCLE_BRIDGE_TRANSFER_SPEED=FAST
 
-CIRCLE_WALLET_SET_ID=
-CIRCLE_WALLET_ID=
-CIRCLE_WALLET_ADDRESS=
+CIRCLE_WALLET_SET_ID_ARC=
+CIRCLE_WALLET_ID_ARC=
+CIRCLE_WALLET_ADDRESS_ARC=
+CIRCLE_WALLET_SET_ID_SEPOLIA=
+CIRCLE_WALLET_ID_SEPOLIA=
+CIRCLE_WALLET_ADDRESS_SEPOLIA=
 
 CIRCLE_KIT_KEY=
 NEXT_PUBLIC_CIRCLE_KIT_KEY=
@@ -187,7 +190,9 @@ NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 
 Bridge wallet notes:
 
-- leave `CIRCLE_WALLET_SET_ID`, `CIRCLE_WALLET_ID`, and `CIRCLE_WALLET_ADDRESS` empty during the first setup
+- set `CIRCLE_WALLET_ID_SEPOLIA` to the Ethereum Sepolia wallet ID from Circle Console
+- set `CIRCLE_WALLET_ID_ARC` to the Arc Testnet wallet ID from Circle Console
+- leave the per-chain wallet set and wallet address fields empty during the first setup unless you intentionally want to pin them too
 - the bootstrap routes in this repo can create and discover new wallets from scratch
 
 Current default bridge token mapping:
@@ -260,7 +265,7 @@ Invoke-RestMethod -Uri "http://localhost:3000/api/transfers/wallet?blockchain=AR
 Important note:
 
 - the first bootstrap can create a brand-new wallet set automatically
-- only store `CIRCLE_WALLET_SET_ID`, `CIRCLE_WALLET_ID`, and `CIRCLE_WALLET_ADDRESS` later if you intentionally want to pin them
+- only store `CIRCLE_WALLET_SET_ID_SEPOLIA`, `CIRCLE_WALLET_ADDRESS_SEPOLIA`, `CIRCLE_WALLET_SET_ID_ARC`, and `CIRCLE_WALLET_ADDRESS_ARC` later if you intentionally want to pin them
 
 ### 11. Fund the New Bridge Source Wallets
 
@@ -302,11 +307,14 @@ Important behavior:
 
 ### 13. When to Persist Wallet IDs in Env
 
-After bootstrap succeeds and you are confident the selected wallet is correct, you may optionally persist these values for more stable resolution:
+After bootstrap succeeds and you are confident the selected wallets are correct, you may optionally persist these values for more stable resolution:
 
-- `CIRCLE_WALLET_SET_ID`
-- `CIRCLE_WALLET_ID`
-- `CIRCLE_WALLET_ADDRESS`
+- `CIRCLE_WALLET_ID_SEPOLIA`
+- `CIRCLE_WALLET_SET_ID_SEPOLIA`
+- `CIRCLE_WALLET_ADDRESS_SEPOLIA`
+- `CIRCLE_WALLET_ID_ARC`
+- `CIRCLE_WALLET_SET_ID_ARC`
+- `CIRCLE_WALLET_ADDRESS_ARC`
 
 This is optional. For the initial migration, it is safer to leave them empty.
 

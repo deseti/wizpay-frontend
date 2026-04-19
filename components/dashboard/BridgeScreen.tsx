@@ -319,10 +319,15 @@ function getBridgeErrorMessage(
   }
 
   if (
+    transferError?.code === "CIRCLE_WALLET_ID_MISMATCH" ||
     transferError?.code === "CIRCLE_WALLET_CHAIN_MISMATCH" ||
     transferError?.code === "CIRCLE_BRIDGE_SOURCE_WALLET_CHAIN_MISMATCH"
   ) {
     return `The configured ${labels.sourceLabel} ${APP_TREASURY_WALLET_LABEL} does not match the selected route. Update the per-chain Circle wallet mapping before retrying.`;
+  }
+
+  if (transferError?.code === "CIRCLE_BRIDGE_SAME_CHAIN") {
+    return "Bridge source and destination must be different networks.";
   }
 
   if (
@@ -603,6 +608,11 @@ export function BridgeScreen() {
   );
   const sourceChain = getSourceBlockchain(destinationChain);
   const sourceOption = useMemo(() => getOptionByChain(sourceChain), [sourceChain]);
+  const treasuryWalletOption = useMemo(
+    () =>
+      transferWallet ? getOptionByChain(transferWallet.blockchain) : sourceOption,
+    [transferWallet, sourceOption]
+  );
   const transferDestinationOption = useMemo(
     () => (transfer ? getOptionByChain(transfer.blockchain) : destinationOption),
     [transfer, destinationOption]
@@ -696,6 +706,9 @@ export function BridgeScreen() {
 
     async function loadTransferWallet() {
       setIsWalletLoading(true);
+      setTransferWallet((currentWallet) =>
+        currentWallet?.blockchain === sourceChain ? currentWallet : null
+      );
 
       const storedWallet = getStoredTransferWallet(sourceChain);
 
@@ -723,7 +736,8 @@ export function BridgeScreen() {
           error instanceof TransferApiError &&
           (error.code === "CIRCLE_WALLET_NOT_FOUND" ||
             error.code === "CIRCLE_WALLET_CONFIG_MISSING" ||
-            error.code === "CIRCLE_WALLET_CHAIN_MISMATCH")
+            error.code === "CIRCLE_WALLET_CHAIN_MISMATCH" ||
+            error.code === "CIRCLE_WALLET_ID_MISMATCH")
         ) {
           clearStoredTransferWallet(sourceChain);
         }
@@ -860,6 +874,9 @@ export function BridgeScreen() {
 
   async function refreshTransferWallet() {
     setIsWalletLoading(true);
+    setTransferWallet((currentWallet) =>
+      currentWallet?.blockchain === sourceChain ? currentWallet : null
+    );
 
     const storedWallet = getStoredTransferWallet(sourceChain);
 
@@ -879,7 +896,8 @@ export function BridgeScreen() {
         error instanceof TransferApiError &&
         (error.code === "CIRCLE_WALLET_NOT_FOUND" ||
           error.code === "CIRCLE_WALLET_CONFIG_MISSING" ||
-          error.code === "CIRCLE_WALLET_CHAIN_MISMATCH")
+          error.code === "CIRCLE_WALLET_CHAIN_MISMATCH" ||
+          error.code === "CIRCLE_WALLET_ID_MISMATCH")
       ) {
         clearStoredTransferWallet(sourceChain);
       }
@@ -944,6 +962,13 @@ export function BridgeScreen() {
       return;
     }
 
+    if (transferWallet.blockchain !== sourceChain) {
+      setErrorMessage(
+        `The displayed ${APP_TREASURY_WALLET_LABEL} does not match ${sourceOption.label}. Refresh the treasury wallet and try again.`
+      );
+      return;
+    }
+
     if (!hasSufficientWalletBalance) {
       setErrorMessage(
         getTreasuryFundingMessage({
@@ -971,6 +996,14 @@ export function BridgeScreen() {
   async function submitBridge() {
     if (!transferWallet) {
       setErrorMessage(getTreasurySetupMessage(sourceOption.label));
+      setIsReviewDialogOpen(false);
+      return;
+    }
+
+    if (transferWallet.blockchain !== sourceChain) {
+      setErrorMessage(
+        `The displayed ${APP_TREASURY_WALLET_LABEL} does not match ${sourceOption.label}. Refresh the treasury wallet and try again.`
+      );
       setIsReviewDialogOpen(false);
       return;
     }
@@ -1354,7 +1387,7 @@ export function BridgeScreen() {
                 <div className="mt-3 space-y-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground/70">Network</span>
-                    <span className="font-medium">{sourceOption.label}</span>
+                    <span className="font-medium">{treasuryWalletOption.label}</span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground/70">Asset</span>

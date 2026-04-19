@@ -12,10 +12,8 @@ import type {
 } from "@circle-fin/developer-controlled-wallets";
 
 import {
-  getWalletAddressByChain,
-  getWalletEnvName,
-  getWalletIdByChain,
-  getWalletSetIdByChain,
+  getWalletByChain,
+  type CircleWalletByChain,
 } from "@/lib/server/circle-wallet-mapping";
 
 export type CircleTransferBlockchain = "ARC-TESTNET" | "ETH-SEPOLIA";
@@ -106,10 +104,7 @@ interface ChainWalletConfig {
 interface CircleTransferConfig {
   circleApiKey: string;
   circleEntitySecret: string;
-  legacyCircleWalletSetId: string;
-  legacyCircleWalletId: string;
-  legacyCircleWalletAddress: string;
-  chainWallets: Record<CircleTransferBlockchain, ChainWalletConfig>;
+  chainWallets: Record<CircleTransferBlockchain, CircleWalletByChain>;
   circleWalletsBaseUrl: string;
   defaultBlockchain: CircleTransferBlockchain;
   defaultTokenAddress: string;
@@ -134,9 +129,6 @@ export interface CircleTransferRuntimeDebugConfig {
   defaultTokenAddress: string;
   entitySecretFingerprint: string | null;
   entitySecretLength: number;
-  legacyCircleWalletAddress: string | null;
-  legacyCircleWalletId: string | null;
-  legacyCircleWalletSetId: string | null;
 }
 
 export interface CircleTransferRuntimeDebugSnapshot {
@@ -221,7 +213,6 @@ export async function bootstrapTransferWallet(
   let walletSetId =
     input.walletSetId ||
     config.chainWallets[blockchain].walletSetId ||
-    config.legacyCircleWalletSetId ||
     runtimeWalletSetIds.get(blockchain) ||
     null;
 
@@ -482,23 +473,9 @@ function getConfig(): CircleTransferConfig {
     circleApiKey: normalizeOptionalString(process.env.CIRCLE_API_KEY) || "",
     circleEntitySecret:
       normalizeOptionalString(process.env.CIRCLE_ENTITY_SECRET) || "",
-    legacyCircleWalletSetId:
-      normalizeOptionalString(process.env.CIRCLE_WALLET_SET_ID) || "",
-    legacyCircleWalletId:
-      normalizeOptionalString(process.env.CIRCLE_WALLET_ID) || "",
-    legacyCircleWalletAddress:
-      normalizeOptionalString(process.env.CIRCLE_WALLET_ADDRESS) || "",
     chainWallets: {
-      "ARC-TESTNET": {
-        walletSetId: getWalletSetIdByChain("ARC-TESTNET"),
-        walletId: getWalletIdByChain("ARC-TESTNET"),
-        walletAddress: getWalletAddressByChain("ARC-TESTNET"),
-      },
-      "ETH-SEPOLIA": {
-        walletSetId: getWalletSetIdByChain("ETH-SEPOLIA"),
-        walletId: getWalletIdByChain("ETH-SEPOLIA"),
-        walletAddress: getWalletAddressByChain("ETH-SEPOLIA"),
-      },
+      "ARC-TESTNET": getWalletByChain("ARC-TESTNET"),
+      "ETH-SEPOLIA": getWalletByChain("ETH-SEPOLIA"),
     },
     circleWalletsBaseUrl: normalizedCircleWalletsBaseUrl,
     defaultBlockchain: normalizeBlockchain(configuredBlockchain),
@@ -552,12 +529,6 @@ function toRuntimeDebugConfig(
     defaultTokenAddress: config.defaultTokenAddress,
     entitySecretFingerprint: fingerprintValue(config.circleEntitySecret),
     entitySecretLength: config.circleEntitySecret.length,
-    legacyCircleWalletAddress:
-      normalizeOptionalString(config.legacyCircleWalletAddress) || null,
-    legacyCircleWalletId:
-      normalizeOptionalString(config.legacyCircleWalletId) || null,
-    legacyCircleWalletSetId:
-      normalizeOptionalString(config.legacyCircleWalletSetId) || null,
   };
 }
 
@@ -603,20 +574,59 @@ async function resolveWalletConfig(
   const rememberedWallet = runtimeWallets.get(blockchain);
   const walletSetId =
     chainWalletConfig.walletSetId ||
-    config.legacyCircleWalletSetId ||
     runtimeWalletSetIds.get(blockchain) ||
     null;
   let configuredWalletSetWasChecked = false;
-  let shouldIgnoreRequestedWalletAddress = false;
 
   if (requestedWalletId) {
+    if (
+      chainWalletConfig.walletId &&
+      requestedWalletId !== chainWalletConfig.walletId
+    ) {
+      logWalletMappingError({
+        actualWalletId: requestedWalletId,
+        blockchain,
+        expectedWalletId: chainWalletConfig.walletId,
+        reason: "requested walletId does not match the configured chain walletId",
+      });
+
+      throw new CircleTransferError(
+        `Requested Circle wallet ${requestedWalletId} does not match the configured wallet ${chainWalletConfig.walletId} for ${blockchain}.`,
+        409,
+        "CIRCLE_WALLET_ID_MISMATCH",
+        {
+          actualWalletId: requestedWalletId,
+          blockchain,
+          configuredEnv: chainWalletConfig.walletIdEnvName,
+          expectedWalletId: chainWalletConfig.walletId,
+        }
+      );
+    }
+
     const requestedWallet = await getWalletById(client, requestedWalletId);
 
     if (walletMatchesBlockchain(requestedWallet, blockchain)) {
       return rememberWallet(requestedWallet);
     }
 
-    shouldIgnoreRequestedWalletAddress = true;
+    logWalletMappingError({
+      actualWalletId: requestedWalletId,
+      blockchain,
+      reason: "requested walletId belongs to a different blockchain",
+      walletBlockchain: String(requestedWallet.blockchain),
+    });
+
+    throw new CircleTransferError(
+      `Requested Circle wallet ${requestedWalletId} is not on ${blockchain}.`,
+      409,
+      "CIRCLE_WALLET_CHAIN_MISMATCH",
+      {
+        blockchain,
+        walletAddress: requestedWallet.address,
+        walletBlockchain: String(requestedWallet.blockchain),
+        walletId: requestedWallet.id,
+      }
+    );
   }
 
   if (chainWalletConfig.walletId) {
@@ -625,7 +635,7 @@ async function resolveWalletConfig(
       assertConfiguredWalletMatchesChain(
         chainWallet,
         blockchain,
-        getWalletEnvName("CIRCLE_WALLET_ID", blockchain)
+        chainWalletConfig.walletIdEnvName
       )
     );
   }
@@ -645,26 +655,12 @@ async function resolveWalletConfig(
     configuredWalletSetWasChecked = true;
   }
 
-  if (config.legacyCircleWalletId) {
-    const wallet = await getWalletById(client, config.legacyCircleWalletId);
-
-    if (walletMatchesBlockchain(wallet, blockchain)) {
-      return rememberWallet(wallet);
-    }
-  }
-
-  if (
-    (!shouldIgnoreRequestedWalletAddress && requestedWalletAddress) ||
-    chainWalletConfig.walletAddress ||
-    config.legacyCircleWalletAddress
-  ) {
+  if (requestedWalletAddress || chainWalletConfig.walletAddress) {
     return {
       walletSetId: null,
       walletId: null,
       walletAddress:
-        (!shouldIgnoreRequestedWalletAddress && requestedWalletAddress) ||
-        chainWalletConfig.walletAddress ||
-        config.legacyCircleWalletAddress,
+        requestedWalletAddress || chainWalletConfig.walletAddress,
       blockchain,
     };
   }
@@ -697,7 +693,7 @@ async function resolveWalletConfig(
   }
 
   throw new CircleTransferError(
-    `Circle transfer wallet is not configured for ${blockchain}. Bootstrap a transfer wallet for this chain or set ${getWalletEnvName("CIRCLE_WALLET_ID", blockchain)}, ${getWalletEnvName("CIRCLE_WALLET_ADDRESS", blockchain)}, or ${getWalletEnvName("CIRCLE_WALLET_SET_ID", blockchain)} on the server.`,
+    `Circle transfer wallet is not configured for ${blockchain}. Bootstrap a transfer wallet for this chain or set ${chainWalletConfig.walletIdEnvName}, ${chainWalletConfig.walletAddressEnvName}, or ${chainWalletConfig.walletSetIdEnvName} on the server.`,
     503,
     "CIRCLE_WALLET_CONFIG_MISSING",
     { blockchain }
@@ -725,6 +721,15 @@ function assertConfiguredWalletMatchesChain(
   if (walletBlockchain === blockchain) {
     return wallet;
   }
+
+  logWalletMappingError({
+    actualWalletId: wallet.id,
+    blockchain,
+    configuredEnv: envName,
+    reason: "configured walletId belongs to a different blockchain",
+    walletAddress: wallet.address,
+    walletBlockchain,
+  });
 
   throw new CircleTransferError(
     `Configured Circle wallet ${wallet.id} from ${envName} is on ${walletBlockchain}, but ${blockchain} was requested. Fix the per-chain treasury wallet mapping before retrying.`,
@@ -1084,6 +1089,10 @@ async function wrapCircleCall<T>(
   } catch (error) {
     throw toCircleTransferError(error, fallbackMessage);
   }
+}
+
+function logWalletMappingError(details: Record<string, unknown>) {
+  console.error("Circle wallet mapping mismatch", details);
 }
 
 function toCircleTransferError(

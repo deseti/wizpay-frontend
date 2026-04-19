@@ -101,6 +101,19 @@ export async function createCircleBridgeTransfer(
 ): Promise<CircleBridgeTransferRecord> {
   const destinationBlockchain = normalizeBlockchain(input.blockchain);
   const sourceBlockchain = getSourceBlockchain(destinationBlockchain);
+
+  if (sourceBlockchain === destinationBlockchain) {
+    throw new CircleTransferError(
+      `Bridge source and destination cannot both be ${destinationBlockchain}.`,
+      400,
+      "CIRCLE_BRIDGE_SAME_CHAIN",
+      {
+        destinationBlockchain,
+        sourceBlockchain,
+      }
+    );
+  }
+
   const referenceId =
     normalizeOptionalString(input.referenceId) ||
     `BRIDGE-${destinationBlockchain}-${Date.now()}`;
@@ -232,6 +245,12 @@ async function executeCircleBridgeTransfer(
       transferSpeed: config.transferSpeed,
     },
   };
+
+  console.log("Bridge Execution", {
+    destinationChain: input.destinationBlockchain,
+    sourceChain: input.sourceBlockchain,
+    sourceWalletId: input.sourceWallet.walletId,
+  });
 
   try {
     const bridgeResult = await kit.bridge(bridgeParams);

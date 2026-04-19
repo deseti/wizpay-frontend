@@ -1,14 +1,41 @@
 import type { CircleTransferBlockchain } from "@/lib/server/circle-transfer";
 
-const CHAIN_ENV_SUFFIX: Record<CircleTransferBlockchain, string> = {
-  "ARC-TESTNET": "ARC_TESTNET",
-  "ETH-SEPOLIA": "ETH_SEPOLIA",
+interface CircleWalletEnvNames {
+  walletAddressEnvName: string;
+  walletIdEnvName: string;
+  walletSetIdEnvName: string;
+}
+
+export interface CircleWalletByChain {
+  chain: CircleTransferBlockchain;
+  walletAddress: string;
+  walletAddressEnvName: string;
+  walletId: string;
+  walletIdEnvName: string;
+  walletSetId: string;
+  walletSetIdEnvName: string;
+}
+
+const WALLET_ENV_NAMES_BY_CHAIN: Record<
+  CircleTransferBlockchain,
+  CircleWalletEnvNames
+> = {
+  "ARC-TESTNET": {
+    walletAddressEnvName: "CIRCLE_WALLET_ADDRESS_ARC",
+    walletIdEnvName: "CIRCLE_WALLET_ID_ARC",
+    walletSetIdEnvName: "CIRCLE_WALLET_SET_ID_ARC",
+  },
+  "ETH-SEPOLIA": {
+    walletAddressEnvName: "CIRCLE_WALLET_ADDRESS_SEPOLIA",
+    walletIdEnvName: "CIRCLE_WALLET_ID_SEPOLIA",
+    walletSetIdEnvName: "CIRCLE_WALLET_SET_ID_SEPOLIA",
+  },
 };
 
 export function normalizeCircleWalletChain(
   chain: string | undefined
 ): CircleTransferBlockchain {
-  const normalizedChain = (chain || "ARC-TESTNET").toUpperCase();
+  const normalizedChain = (chain || "ARC-TESTNET").trim().toUpperCase();
 
   if (
     normalizedChain === "ARC-TESTNET" ||
@@ -20,27 +47,22 @@ export function normalizeCircleWalletChain(
   throw new Error(`Unsupported Circle wallet chain ${chain}.`);
 }
 
-export function getWalletEnvName(baseName: string, chain: string): string {
+export function getWalletByChain(chain: string): CircleWalletByChain {
   const normalizedChain = normalizeCircleWalletChain(chain);
+  const envNames = WALLET_ENV_NAMES_BY_CHAIN[normalizedChain];
 
-  return `${baseName}_${CHAIN_ENV_SUFFIX[normalizedChain]}`;
+  return {
+    chain: normalizedChain,
+    walletAddress: getEnvValue(envNames.walletAddressEnvName),
+    walletAddressEnvName: envNames.walletAddressEnvName,
+    walletId: getEnvValue(envNames.walletIdEnvName),
+    walletIdEnvName: envNames.walletIdEnvName,
+    walletSetId: getEnvValue(envNames.walletSetIdEnvName),
+    walletSetIdEnvName: envNames.walletSetIdEnvName,
+  };
 }
 
-export function getWalletIdByChain(chain: string): string {
-  return getChainWalletValue("CIRCLE_WALLET_ID", chain);
-}
-
-export function getWalletAddressByChain(chain: string): string {
-  return getChainWalletValue("CIRCLE_WALLET_ADDRESS", chain);
-}
-
-export function getWalletSetIdByChain(chain: string): string {
-  return getChainWalletValue("CIRCLE_WALLET_SET_ID", chain);
-}
-
-function getChainWalletValue(baseName: string, chain: string): string {
-  const envName = getWalletEnvName(baseName, chain);
-
+function getEnvValue(envName: string): string {
   return normalizeOptionalString(process.env[envName]) || "";
 }
 
