@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
+  Clock3,
   Droplet,
   ExternalLink,
   RefreshCw,
@@ -42,29 +44,43 @@ import { useToast } from "@/hooks/use-toast";
 import {
   bootstrapCircleTransferWallet,
   createCircleTransfer,
+  getCircleTransferStatus,
   getCircleTransferWallet,
   TransferApiError,
   type CircleTransfer,
   type CircleTransferBlockchain,
+  type CircleTransferStep,
   type CircleTransferWallet,
 } from "@/lib/transfer-service";
 
 const TRANSFER_WALLET_STORAGE_KEY = "wizpay-bridge-transfer-wallets";
+const ACTIVE_TRANSFER_STORAGE_KEY = "wizpay-bridge-active-transfer";
+const BRIDGE_POLL_INTERVAL_MS = 4_000;
+const BRIDGE_LONG_RUNNING_MS = 120_000;
+const BRIDGE_ESTIMATED_TIME_LABEL = "30-90 seconds";
+const STEP_ORDER = ["burn", "attestation", "mint"] as const;
+
+type BridgeStepId = (typeof STEP_ORDER)[number];
+type StoredTransferWallet = {
+  walletId: string | null;
+  walletAddress: string;
+  walletSetId: string | null;
+};
+type StoredTransferWalletMap = Partial<
+  Record<CircleTransferBlockchain, StoredTransferWallet>
+>;
 
 const DESTINATION_OPTIONS: Array<{
   id: CircleTransferBlockchain;
   label: string;
-  explorerBaseUrl: string;
 }> = [
   {
     id: "ARC-TESTNET",
     label: "Arc Testnet",
-    explorerBaseUrl: "https://testnet.arcscan.app",
   },
   {
     id: "ETH-SEPOLIA",
     label: "Ethereum Sepolia",
-    explorerBaseUrl: "https://sepolia.etherscan.io",
   },
 ];
 
@@ -77,10 +93,33 @@ const USDC_ADDRESS_BY_CHAIN: Record<CircleTransferBlockchain, string> = {
   "ETH-SEPOLIA": ETHEREUM_SEPOLIA_USDC_ADDRESS,
 };
 
+function getOptionByChain(chain: CircleTransferBlockchain) {
+  return (
+    DESTINATION_OPTIONS.find((option) => option.id === chain) ??
+    DESTINATION_OPTIONS[0]
+  );
+}
+
 function getSourceBlockchain(
   destinationChain: CircleTransferBlockchain
 ): CircleTransferBlockchain {
   return destinationChain === "ARC-TESTNET" ? "ETH-SEPOLIA" : "ARC-TESTNET";
+}
+
+function normalizeBridgeStepId(value: string | undefined): BridgeStepId | null {
+  if (value === "burn" || value === "attestation" || value === "mint") {
+    return value;
+  }
+
+  return null;
+}
+
+function isTrackedTransfer(
+  transfer: CircleTransfer | null
+): transfer is CircleTransfer {
+  return Boolean(
+    transfer && (transfer.status === "pending" || transfer.status === "processing")
+  );
 }
 
 function isPositiveDecimal(input: string) {
@@ -115,16 +154,7 @@ function getStoredTransferWallet(blockchain: CircleTransferBlockchain) {
       return null;
     }
 
-    const parsedValue = JSON.parse(rawValue) as Partial<
-      Record<
-        CircleTransferBlockchain,
-        {
-          walletId: string | null;
-          walletAddress: string;
-          walletSetId: string | null;
-        }
-      >
-    >;
+    const parsedValue = JSON.parse(rawValue) as StoredTransferWalletMap;
 
     return parsedValue[blockchain] ?? null;
   } catch {
@@ -152,7 +182,7 @@ function setStoredTransferWallet(
       JSON.stringify(currentWallets)
     );
   } catch {
-    // Ignore local storage write failures and continue with in-memory state.
+    return;
   }
 }
 
@@ -169,40 +199,62 @@ function clearStoredTransferWallet(blockchain: CircleTransferBlockchain) {
       JSON.stringify(currentWallets)
     );
   } catch {
-    // Ignore local storage write failures and continue with in-memory state.
+    return;
   }
 }
 
-function getStoredTransferWallets() {
+function getStoredTransferWallets(): StoredTransferWalletMap {
   if (typeof window === "undefined") {
-    return {} as Partial<
-      Record<
-        CircleTransferBlockchain,
-        {
-          walletId: string | null;
-          walletAddress: string;
-          walletSetId: string | null;
-        }
-      >
-    >;
+    return {};
   }
 
   try {
     const rawValue = window.localStorage.getItem(TRANSFER_WALLET_STORAGE_KEY);
-    return rawValue
-      ? (JSON.parse(rawValue) as Partial<
-          Record<
-            CircleTransferBlockchain,
-            {
-              walletId: string | null;
-              walletAddress: string;
-              walletSetId: string | null;
-            }
-          >
-        >)
-      : {};
+
+    return rawValue ? (JSON.parse(rawValue) as StoredTransferWalletMap) : {};
   } catch {
     return {};
+  }
+}
+
+function getStoredActiveTransfer() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(ACTIVE_TRANSFER_STORAGE_KEY);
+
+    return rawValue ? (JSON.parse(rawValue) as CircleTransfer) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredActiveTransfer(transfer: CircleTransfer) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      ACTIVE_TRANSFER_STORAGE_KEY,
+      JSON.stringify(transfer)
+    );
+  } catch {
+    return;
+  }
+}
+
+function clearStoredActiveTransfer() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(ACTIVE_TRANSFER_STORAGE_KEY);
+  } catch {
+    return;
   }
 }
 
@@ -247,7 +299,8 @@ function getBridgeErrorMessage(
 ) {
   const transferError = error instanceof TransferApiError ? error : null;
   const details = getErrorDetails(transferError);
-  const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+  const message =
+    error instanceof Error ? error.message : String(error ?? "Unknown error");
 
   if (transferError?.code === "CIRCLE_WALLET_NOT_FOUND") {
     const walletSetCount = Array.isArray(details?.walletSetIds)
@@ -266,11 +319,18 @@ function getBridgeErrorMessage(
   }
 
   if (
+    transferError?.code === "CIRCLE_WALLET_CHAIN_MISMATCH" ||
+    transferError?.code === "CIRCLE_BRIDGE_SOURCE_WALLET_CHAIN_MISMATCH"
+  ) {
+    return `The configured ${labels.sourceLabel} ${APP_TREASURY_WALLET_LABEL} does not match the selected route. Update the per-chain Circle wallet mapping before retrying.`;
+  }
+
+  if (
     transferError?.code === "CIRCLE_ENTITY_SECRET_INVALID" ||
     transferError?.code === "CIRCLE_ENTITY_SECRET_NOT_REGISTERED" ||
     transferError?.code === "CIRCLE_ENTITY_SECRET_ROTATED"
   ) {
-    return "The server can read Circle wallet sets, but signed write calls are being rejected. This usually means CIRCLE_ENTITY_SECRET does not match the Circle entity/project behind the current API key, or the secret was pasted with extra whitespace. Standard API keys are valid for this flow, so switching to Restricted Key will not fix a 156013 error.";
+    return "The server can read Circle wallet sets, but signed write calls are being rejected. This usually means CIRCLE_ENTITY_SECRET does not match the Circle entity or project behind the current API key, or the secret was pasted with extra whitespace.";
   }
 
   if (transferError?.code === "CIRCLE_ENTITY_SECRET_FORMAT_INVALID") {
@@ -285,9 +345,16 @@ function getBridgeErrorMessage(
     return `Circle Forwarder is not available for the ${labels.sourceLabel} to ${labels.destinationLabel} route right now. Retry later or use a different supported pair.`;
   }
 
+  if (transferError?.code === "CIRCLE_BRIDGE_NOT_FOUND") {
+    return "The last bridge session is no longer available on this server. Start a new bridge to resume live tracking.";
+  }
+
   if (transferError?.code === "CIRCLE_BRIDGE_EXECUTION_FAILED") {
     const failedStep =
-      details && typeof details === "object" && details.failedStep && typeof details.failedStep === "object"
+      details &&
+      typeof details === "object" &&
+      details.failedStep &&
+      typeof details.failedStep === "object"
         ? (details.failedStep as Record<string, unknown>)
         : null;
     const failedStepName =
@@ -356,9 +423,163 @@ function formatWalletBalance(
   return `${wallet.balance.amount} ${wallet.balance.symbol || tokenSymbol}`;
 }
 
+function getOrderedBridgeSteps(
+  transfer: CircleTransfer,
+  sourceLabel: string,
+  destinationLabel: string
+): CircleTransferStep[] {
+  return STEP_ORDER.map((stepId) => {
+    const step = transfer.steps.find((candidate) => candidate.id === stepId);
+
+    if (step) {
+      return step;
+    }
+
+    return {
+      id: stepId,
+      name:
+        stepId === "burn"
+          ? `Burn on ${sourceLabel}`
+          : stepId === "mint"
+            ? `Mint on ${destinationLabel}`
+            : "Waiting for Circle attestation",
+      state: "pending",
+      txHash: null,
+      explorerUrl: null,
+      errorMessage: null,
+    };
+  });
+}
+
+function getCurrentStepId(
+  transfer: CircleTransfer | null,
+  steps: CircleTransferStep[]
+): BridgeStepId | null {
+  if (!transfer || steps.length === 0) {
+    return null;
+  }
+
+  const failedStep = steps.find((step) => step.state === "error");
+
+  if (failedStep) {
+    return normalizeBridgeStepId(failedStep.id);
+  }
+
+  if (transfer.status === "settled") {
+    return "mint";
+  }
+
+  const pendingStep = steps.find((step) => step.state === "pending");
+
+  if (pendingStep) {
+    return normalizeBridgeStepId(pendingStep.id);
+  }
+
+  const inFlightStep = steps.find(
+    (step) => step.state !== "success" && step.state !== "noop"
+  );
+
+  if (inFlightStep) {
+    return normalizeBridgeStepId(inFlightStep.id);
+  }
+
+  return normalizeBridgeStepId(steps[steps.length - 1]?.id);
+}
+
+function getTransferHeadline(
+  transfer: CircleTransfer,
+  currentStepName: string | undefined
+) {
+  if (transfer.status === "settled") {
+    return "Bridge completed successfully";
+  }
+
+  if (transfer.status === "failed") {
+    return "Bridge needs attention";
+  }
+
+  if (transfer.rawStatus === "attested") {
+    return "Circle attestation received";
+  }
+
+  return currentStepName || "Bridge submitted";
+}
+
+function getTransferStatusLabel(transfer: CircleTransfer) {
+  if (transfer.status === "settled") {
+    return "Completed";
+  }
+
+  if (transfer.status === "failed") {
+    return "Failed";
+  }
+
+  if (transfer.rawStatus === "attested") {
+    return "Attested";
+  }
+
+  if (transfer.rawStatus === "burned") {
+    return "Burn confirmed";
+  }
+
+  return transfer.status === "processing" ? "Processing" : "Queued";
+}
+
+function getStatusBadgeClass(transfer: CircleTransfer) {
+  if (transfer.status === "settled") {
+    return "border-emerald-500/25 bg-emerald-500/10 text-emerald-300";
+  }
+
+  if (transfer.status === "failed") {
+    return "border-destructive/25 bg-destructive/10 text-destructive";
+  }
+
+  if (transfer.rawStatus === "attested") {
+    return "border-primary/25 bg-primary/10 text-primary";
+  }
+
+  return "border-amber-500/25 bg-amber-500/10 text-amber-300";
+}
+
+function getStepStatusLabel(
+  step: CircleTransferStep,
+  currentStepId: BridgeStepId | null,
+  transferStatus: CircleTransfer["status"]
+) {
+  const stepId = normalizeBridgeStepId(step.id);
+
+  if (step.state === "success") {
+    return "Success";
+  }
+
+  if (step.state === "error") {
+    return "Failed";
+  }
+
+  if (transferStatus === "settled" && stepId === "mint") {
+    return "Success";
+  }
+
+  if (currentStepId && stepId === currentStepId) {
+    return "In progress";
+  }
+
+  return "Pending";
+}
+
+function getLastUpdatedLabel(timestamp: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(timestamp));
+}
+
 export function BridgeScreen() {
   const { arcWallet, sepoliaWallet } = useCircleWallet();
   const { toast } = useToast();
+  const restoredTransferRef = useRef(false);
+  const terminalNoticeRef = useRef<string | null>(null);
 
   const [destinationChain, setDestinationChain] =
     useState<CircleTransferBlockchain>("ETH-SEPOLIA");
@@ -371,22 +592,24 @@ export function BridgeScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isWalletLoading, setIsWalletLoading] = useState(false);
   const [isWalletBootstrapping, setIsWalletBootstrapping] = useState(false);
+  const [isPollingTransfer, setIsPollingTransfer] = useState(false);
   const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false);
   const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
   const tokenSymbol = BRIDGE_ASSET_SYMBOL;
 
   const destinationOption = useMemo(
-    () =>
-      DESTINATION_OPTIONS.find((option) => option.id === destinationChain) ??
-      DESTINATION_OPTIONS[0],
+    () => getOptionByChain(destinationChain),
     [destinationChain]
   );
   const sourceChain = getSourceBlockchain(destinationChain);
-  const sourceOption = useMemo(
-    () =>
-      DESTINATION_OPTIONS.find((option) => option.id === sourceChain) ??
-      DESTINATION_OPTIONS[0],
-    [sourceChain]
+  const sourceOption = useMemo(() => getOptionByChain(sourceChain), [sourceChain]);
+  const transferDestinationOption = useMemo(
+    () => (transfer ? getOptionByChain(transfer.blockchain) : destinationOption),
+    [transfer, destinationOption]
+  );
+  const transferSourceOption = useMemo(
+    () => (transfer ? getOptionByChain(transfer.sourceBlockchain) : sourceOption),
+    [transfer, sourceOption]
   );
   const suggestedDestinationAddress =
     destinationChain === "ARC-TESTNET"
@@ -402,36 +625,71 @@ export function BridgeScreen() {
     !Number.isFinite(requestedAmount) ||
     requestedAmount <= 0 ||
     walletBalanceAmount >= requestedAmount;
+  const isTransferActive = isTrackedTransfer(transfer);
   const canSubmit =
     Boolean(destinationTokenAddress) &&
     isPositiveDecimal(amount) &&
     isValidAddress(destinationAddress) &&
     Boolean(transferWallet) &&
-    hasSufficientWalletBalance;
-  const latestExplorerStep = useMemo(() => {
-    if (!transfer?.steps.length) {
-      return null;
-    }
-
-    for (let index = transfer.steps.length - 1; index >= 0; index -= 1) {
-      const step = transfer.steps[index];
-
-      if (step.explorerUrl) {
-        return step;
-      }
-    }
-
-    return null;
-  }, [transfer]);
+    hasSufficientWalletBalance &&
+    !isTransferActive;
+  const orderedSteps = useMemo(
+    () =>
+      transfer
+        ? getOrderedBridgeSteps(
+            transfer,
+            transferSourceOption.label,
+            transferDestinationOption.label
+          )
+        : [],
+    [transfer, transferDestinationOption.label, transferSourceOption.label]
+  );
+  const currentStepId = useMemo(
+    () => getCurrentStepId(transfer, orderedSteps),
+    [orderedSteps, transfer]
+  );
+  const currentStep = orderedSteps.find(
+    (step) => normalizeBridgeStepId(step.id) === currentStepId
+  );
+  const burnStep = orderedSteps.find((step) => step.id === "burn");
+  const mintStep = orderedSteps.find((step) => step.id === "mint");
+  const shouldShowLongRunningMessage = Boolean(
+    transfer &&
+      isTransferActive &&
+      Date.now() - new Date(transfer.createdAt).getTime() > BRIDGE_LONG_RUNNING_MS
+  );
 
   useEffect(() => {
+    if (restoredTransferRef.current) {
+      return;
+    }
+
+    restoredTransferRef.current = true;
+
+    const storedTransfer = getStoredActiveTransfer();
+
+    if (!storedTransfer) {
+      return;
+    }
+
+    setTransfer(storedTransfer);
+    setDestinationChain(storedTransfer.blockchain);
+    setAmount(storedTransfer.amount);
+    setDestinationAddress(storedTransfer.destinationAddress || "");
+  }, []);
+
+  useEffect(() => {
+    if (isTransferActive) {
+      return;
+    }
+
     if (suggestedDestinationAddress) {
       setDestinationAddress(suggestedDestinationAddress);
       return;
     }
 
     setDestinationAddress("");
-  }, [destinationChain, suggestedDestinationAddress]);
+  }, [isTransferActive, suggestedDestinationAddress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -464,7 +722,8 @@ export function BridgeScreen() {
         if (
           error instanceof TransferApiError &&
           (error.code === "CIRCLE_WALLET_NOT_FOUND" ||
-            error.code === "CIRCLE_WALLET_CONFIG_MISSING")
+            error.code === "CIRCLE_WALLET_CONFIG_MISSING" ||
+            error.code === "CIRCLE_WALLET_CHAIN_MISMATCH")
         ) {
           clearStoredTransferWallet(sourceChain);
         }
@@ -490,6 +749,115 @@ export function BridgeScreen() {
     };
   }, [destinationOption.label, sourceChain, sourceOption.label, sourceTokenAddress]);
 
+  useEffect(() => {
+    if (!transfer) {
+      return;
+    }
+
+    setStoredActiveTransfer(transfer);
+  }, [transfer]);
+
+  useEffect(() => {
+    if (!transfer?.transferId || !isTransferActive) {
+      setIsPollingTransfer(false);
+      return;
+    }
+
+    const activeTransferId = transfer.transferId;
+    let cancelled = false;
+
+    async function pollTransfer() {
+      setIsPollingTransfer(true);
+
+      try {
+        const latestTransfer = await getCircleTransferStatus(activeTransferId);
+
+        if (cancelled) {
+          return;
+        }
+
+        setTransfer(latestTransfer);
+        setStoredActiveTransfer(latestTransfer);
+        setErrorMessage(null);
+
+        if (latestTransfer.status === "settled") {
+          const terminalKey = `${latestTransfer.transferId}:settled`;
+
+          if (terminalNoticeRef.current !== terminalKey) {
+            terminalNoticeRef.current = terminalKey;
+            setIsSuccessDialogOpen(true);
+            toast({
+              title: "Bridge completed",
+              description: `${tokenSymbol} arrived on ${transferDestinationOption.label}.`,
+            });
+            void refreshTransferWallet();
+          }
+        }
+
+        if (latestTransfer.status === "failed") {
+          const terminalKey = `${latestTransfer.transferId}:failed`;
+
+          if (terminalNoticeRef.current !== terminalKey) {
+            terminalNoticeRef.current = terminalKey;
+            toast({
+              title: "Bridge transfer failed",
+              description:
+                latestTransfer.errorReason ||
+                `Circle could not finish the ${transferSourceOption.label} to ${transferDestinationOption.label} bridge.`,
+              variant: "destructive",
+            });
+            void refreshTransferWallet();
+          }
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        if (
+          error instanceof TransferApiError &&
+          error.code === "CIRCLE_BRIDGE_NOT_FOUND"
+        ) {
+          clearStoredActiveTransfer();
+          setTransfer(null);
+          setErrorMessage(
+            "The previous bridge is still processing on-chain, but this browser can no longer track the original server session. Start a new bridge if you need fresh tracking."
+          );
+          return;
+        }
+
+        setErrorMessage(
+          getBridgeErrorMessage(error, {
+            destinationLabel: transferDestinationOption.label,
+            sourceLabel: transferSourceOption.label,
+          })
+        );
+      } finally {
+        if (!cancelled) {
+          setIsPollingTransfer(false);
+        }
+      }
+    }
+
+    void pollTransfer();
+
+    const intervalId = window.setInterval(() => {
+      void pollTransfer();
+    }, BRIDGE_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    isTransferActive,
+    toast,
+    tokenSymbol,
+    transfer?.transferId,
+    transferDestinationOption.label,
+    transferSourceOption.label,
+  ]);
+
   async function refreshTransferWallet() {
     setIsWalletLoading(true);
 
@@ -510,7 +878,8 @@ export function BridgeScreen() {
       if (
         error instanceof TransferApiError &&
         (error.code === "CIRCLE_WALLET_NOT_FOUND" ||
-          error.code === "CIRCLE_WALLET_CONFIG_MISSING")
+          error.code === "CIRCLE_WALLET_CONFIG_MISSING" ||
+          error.code === "CIRCLE_WALLET_CHAIN_MISMATCH")
       ) {
         clearStoredTransferWallet(sourceChain);
       }
@@ -563,6 +932,13 @@ export function BridgeScreen() {
   }
 
   function openBridgeReview() {
+    if (isTransferActive) {
+      setErrorMessage(
+        "A bridge is already running. You can leave this page and come back later while tracking continues in the background."
+      );
+      return;
+    }
+
     if (!transferWallet) {
       setErrorMessage(getTreasurySetupMessage(sourceOption.label));
       return;
@@ -583,7 +959,7 @@ export function BridgeScreen() {
 
     if (!canSubmit) {
       setErrorMessage(
-        "Enter a valid amount and destination wallet before starting the transfer."
+        "Enter a valid amount and destination wallet before starting the bridge."
       );
       return;
     }
@@ -599,32 +975,33 @@ export function BridgeScreen() {
       return;
     }
 
-    const activeTransferWallet = transferWallet;
-
     setIsSubmitting(true);
-    setTransfer(null);
     setErrorMessage(null);
     setIsReviewDialogOpen(false);
+    setIsSuccessDialogOpen(false);
 
     try {
       const referenceId = `BRIDGE-${destinationChain}-${Date.now()}`;
-      const completedTransfer = await createCircleTransfer({
+      const queuedTransfer = await createCircleTransfer({
         amount,
         blockchain: destinationChain,
         destinationAddress,
         referenceId,
         tokenAddress: destinationTokenAddress,
-        walletId: activeTransferWallet.walletId || undefined,
-        walletAddress: activeTransferWallet.walletAddress,
+        walletId: transferWallet.walletId || undefined,
+        walletAddress: transferWallet.walletAddress,
       });
 
-      setTransfer(completedTransfer);
-      setIsSuccessDialogOpen(true);
+      terminalNoticeRef.current = null;
+      setTransfer(queuedTransfer);
+      setStoredActiveTransfer(queuedTransfer);
+      setDestinationChain(queuedTransfer.blockchain);
+      setAmount(queuedTransfer.amount);
+      setDestinationAddress(queuedTransfer.destinationAddress || destinationAddress);
       toast({
-        title: "Bridge settled",
-        description: `${tokenSymbol} arrived on ${destinationOption.label}.`,
+        title: "Bridge started",
+        description: `Estimated time ${BRIDGE_ESTIMATED_TIME_LABEL}. You can leave this page and come back later while Circle finishes the bridge.`,
       });
-      await refreshTransferWallet();
     } catch (error) {
       const message = getBridgeErrorMessage(error, {
         destinationLabel: destinationOption.label,
@@ -638,7 +1015,6 @@ export function BridgeScreen() {
       });
     } finally {
       setIsSubmitting(false);
-      void refreshTransferWallet();
     }
   }
 
@@ -650,7 +1026,8 @@ export function BridgeScreen() {
             Bridge
           </h1>
           <p className="text-sm text-muted-foreground/70">
-            Treasury-assisted Circle Bridge Kit flow for forwarding testnet USDC between Sepolia and Arc.
+            Treasury-assisted Circle CCTP flow for forwarding testnet USDC
+            between Sepolia and Arc.
           </p>
         </div>
       </div>
@@ -665,7 +1042,8 @@ export function BridgeScreen() {
             Treasury-Assisted Bridge
           </CardTitle>
           <CardDescription>
-            Burns USDC from the app treasury wallet on the source network and mints it to the destination address you choose.
+            Burns USDC from the app treasury wallet on the source network and
+            mints it to the destination address you choose.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
@@ -675,9 +1053,157 @@ export function BridgeScreen() {
                 Treasury model
               </p>
               <p className="mt-2 text-sm text-muted-foreground/80">
-                This bridge uses an app-owned Circle developer-controlled wallet on the source network. It is not your personal wallet, and only USDC is supported in this flow.
+                This bridge uses an app-owned Circle developer-controlled wallet
+                on the source network. It is not your personal wallet, and only
+                USDC is supported in this flow.
               </p>
             </div>
+
+            {transfer ? (
+              <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary/80">
+                      Bridge progress
+                    </p>
+                    <h2 className="mt-2 text-lg font-semibold text-foreground">
+                      {getTransferHeadline(transfer, currentStep?.name)}
+                    </h2>
+                    <p className="mt-1 text-sm text-muted-foreground/80">
+                      Estimated time {BRIDGE_ESTIMATED_TIME_LABEL}. You can leave
+                      this page and tracking will resume when you return.
+                    </p>
+                  </div>
+                  <div
+                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${getStatusBadgeClass(
+                      transfer
+                    )}`}
+                  >
+                    {isPollingTransfer && isTransferActive ? (
+                      <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    ) : transfer.status === "settled" ? (
+                      <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                    ) : transfer.status === "failed" ? (
+                      <AlertTriangle className="mr-2 h-3.5 w-3.5" />
+                    ) : (
+                      <Clock3 className="mr-2 h-3.5 w-3.5" />
+                    )}
+                    {getTransferStatusLabel(transfer)}
+                  </div>
+                </div>
+
+                {shouldShowLongRunningMessage ? (
+                  <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                    Still processing on-chain. You can check back later.
+                  </div>
+                ) : null}
+
+                <div className="mt-4 space-y-3">
+                  {orderedSteps.map((step) => {
+                    const stepId = normalizeBridgeStepId(step.id);
+                    const isCurrentStep =
+                      Boolean(stepId && currentStepId && stepId === currentStepId) &&
+                      isTransferActive;
+                    const statusLabel = getStepStatusLabel(
+                      step,
+                      currentStepId,
+                      transfer.status
+                    );
+
+                    return (
+                      <div
+                        key={`${transfer.transferId}-${step.id}`}
+                        className={`rounded-2xl border p-4 ${
+                          step.state === "success"
+                            ? "border-emerald-500/25 bg-emerald-500/5"
+                            : step.state === "error"
+                              ? "border-destructive/25 bg-destructive/5"
+                              : isCurrentStep
+                                ? "border-primary/25 bg-primary/5"
+                                : "border-border/30 bg-background/40"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-start gap-3">
+                            <div
+                              className={`mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl ${
+                                step.state === "success"
+                                  ? "bg-emerald-500/15 text-emerald-300"
+                                  : step.state === "error"
+                                    ? "bg-destructive/10 text-destructive"
+                                    : isCurrentStep
+                                      ? "bg-primary/15 text-primary"
+                                      : "bg-background/60 text-muted-foreground/70"
+                              }`}
+                            >
+                              {step.state === "success" ? (
+                                <CheckCircle2 className="h-4.5 w-4.5" />
+                              ) : step.state === "error" ? (
+                                <AlertTriangle className="h-4.5 w-4.5" />
+                              ) : isCurrentStep ? (
+                                <RefreshCw className="h-4.5 w-4.5 animate-spin" />
+                              ) : (
+                                <Clock3 className="h-4.5 w-4.5" />
+                              )}
+                            </div>
+                            <div>
+                              <p className="font-medium text-foreground">{step.name}</p>
+                              <p className="mt-1 text-xs text-muted-foreground/70">
+                                {statusLabel}
+                              </p>
+                              {step.txHash ? (
+                                <p className="mt-2 font-mono text-xs text-muted-foreground/80">
+                                  {shortenAddress(step.txHash)}
+                                </p>
+                              ) : null}
+                              {step.errorMessage ? (
+                                <p className="mt-2 text-xs text-destructive">
+                                  {step.errorMessage}
+                                </p>
+                              ) : null}
+                            </div>
+                          </div>
+                          {step.explorerUrl ? (
+                            <Button asChild size="sm" variant="outline">
+                              <a
+                                href={step.explorerUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                View tx
+                              </a>
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-border/30 bg-background/40 p-4 text-sm">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
+                      Transfer ID
+                    </p>
+                    <p className="mt-2 font-mono text-xs text-muted-foreground/80">
+                      {transfer.transferId}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-border/30 bg-background/40 p-4 text-sm">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
+                      Route
+                    </p>
+                    <p className="mt-2 font-medium text-foreground">
+                      {transferSourceOption.label} to {transferDestinationOption.label}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground/70">
+                      Last updated {getLastUpdatedLabel(transfer.updatedAt)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -689,6 +1215,7 @@ export function BridgeScreen() {
                   onValueChange={(value) =>
                     setDestinationChain(value as CircleTransferBlockchain)
                   }
+                  disabled={isTransferActive || isSubmitting}
                 >
                   <SelectTrigger className="h-11 border-border/40 bg-background/50">
                     <SelectValue />
@@ -727,6 +1254,7 @@ export function BridgeScreen() {
                   value={amount}
                   onChange={(event) => setAmount(event.target.value)}
                   className="h-11 border-border/40 bg-background/50"
+                  disabled={isTransferActive || isSubmitting}
                 />
               </div>
 
@@ -739,6 +1267,7 @@ export function BridgeScreen() {
                   value={destinationAddress}
                   onChange={(event) => setDestinationAddress(event.target.value)}
                   className="h-11 border-border/40 bg-background/50 font-mono text-xs"
+                  disabled={isTransferActive || isSubmitting}
                 />
               </div>
             </div>
@@ -751,7 +1280,8 @@ export function BridgeScreen() {
 
             {transferWallet && treasuryWalletEmpty && !isPositiveDecimal(amount) ? (
               <div className="rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-                Bridge requires USDC in the app treasury wallet. Please fund this wallet before bridging.
+                Bridge requires USDC in the app treasury wallet. Please fund this
+                wallet before bridging.
               </div>
             ) : null}
 
@@ -769,27 +1299,36 @@ export function BridgeScreen() {
 
             <div className="space-y-3">
               <div className="rounded-2xl border border-border/30 bg-background/40 px-4 py-3 text-sm text-muted-foreground/80">
-                No Circle wallet popup appears in this flow. The bridge is executed by the app treasury wallet on the backend, so your confirmation happens in-app instead of through the Circle wallet signer.
+                No Circle wallet popup appears in this flow. The bridge is
+                executed by the app treasury wallet on the backend, so your
+                confirmation happens in-app instead of through the Circle wallet
+                signer.
               </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row">
-              <Button
-                onClick={openBridgeReview}
-                disabled={
-                  !canSubmit ||
-                  isSubmitting ||
-                  isWalletLoading ||
-                  isWalletBootstrapping
-                }
-                className="h-11 px-5"
-              >
-                {isSubmitting ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Route className="h-4 w-4" />
-                )}
-                {isSubmitting ? "Bridging with Circle..." : `Bridge ${tokenSymbol}`}
-              </Button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <Button
+                  onClick={openBridgeReview}
+                  disabled={
+                    !canSubmit ||
+                    isSubmitting ||
+                    isWalletLoading ||
+                    isWalletBootstrapping
+                  }
+                  className="h-11 px-5"
+                >
+                  {isSubmitting ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Route className="h-4 w-4" />
+                  )}
+                  {isSubmitting ? "Starting bridge..." : `Bridge ${tokenSymbol}`}
+                </Button>
+                {isTransferActive ? (
+                  <p className="text-sm text-muted-foreground/70">
+                    A bridge is already running. You can leave this page and come
+                    back later while tracking continues.
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
@@ -802,7 +1341,8 @@ export function BridgeScreen() {
                     {APP_TREASURY_WALLET_TITLE}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground/70">
-                    App-owned Circle developer-controlled wallet. This is not your personal wallet.
+                    App-owned Circle developer-controlled wallet. This is not your
+                    personal wallet.
                   </p>
                 </div>
                 {isWalletLoading || isWalletBootstrapping ? (
@@ -893,7 +1433,8 @@ export function BridgeScreen() {
                 Your destination wallets
               </p>
               <p className="mt-1 text-xs text-muted-foreground/70">
-                These are your personal Circle wallets. The treasury wallet above belongs to the app.
+                These are your personal Circle wallets. The treasury wallet above
+                belongs to the app.
               </p>
               <div className="mt-3 space-y-3 text-sm">
                 <div className="flex items-center gap-3">
@@ -929,56 +1470,67 @@ export function BridgeScreen() {
                 <div className="mt-3 space-y-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground/70">Status</span>
-                    <span className="font-medium capitalize">{transfer.status}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-muted-foreground/70">Transfer ID</span>
-                    <span className="font-mono text-xs">{shortenAddress(transfer.transferId)}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-muted-foreground/70">Destination</span>
-                    <span className="font-mono text-xs">{shortenAddress(transfer.destinationAddress)}</span>
+                    <span className="font-medium">
+                      {getTransferStatusLabel(transfer)}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground/70">Route</span>
-                    <span className="font-medium">{sourceOption.label} to {destinationOption.label}</span>
+                    <span className="font-medium">
+                      {transferSourceOption.label} to {transferDestinationOption.label}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground/70">Transfer ID</span>
+                    <span className="font-mono text-xs">
+                      {shortenAddress(transfer.transferId)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground/70">Destination</span>
+                    <span className="font-mono text-xs">
+                      {shortenAddress(transfer.destinationAddress)}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground/70">Provider</span>
-                    <span className="font-medium">{transfer.provider || "Circle Bridge Kit"}</span>
+                    <span className="font-medium">
+                      {transfer.provider || "Circle Bridge Kit"}
+                    </span>
                   </div>
-                  {transfer.steps.length > 0 ? (
-                    <div className="space-y-2 rounded-2xl border border-border/30 bg-background/45 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
-                        CCTP steps
-                      </p>
-                      {transfer.steps.map((step) => (
-                        <div key={`${transfer.transferId}-${step.name}`} className="rounded-xl border border-border/25 bg-background/50 p-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="font-medium">{step.name}</span>
-                            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
-                              {step.state}
-                            </span>
-                          </div>
-                          {step.errorMessage ? (
-                            <p className="mt-2 text-xs text-destructive">{step.errorMessage}</p>
-                          ) : null}
-                          {step.explorerUrl ? (
-                            <Button asChild size="sm" variant="outline" className="mt-3 w-full">
-                              <a href={step.explorerUrl} target="_blank" rel="noreferrer">
-                                <ExternalLink className="h-4 w-4" />
-                                View {step.name}
-                              </a>
-                            </Button>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {transfer.txHash ? (
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground/70">Latest tx</span>
-                      <span className="font-mono text-xs">{shortenAddress(transfer.txHash)}</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground/70">Last updated</span>
+                    <span className="font-medium">
+                      {getLastUpdatedLabel(transfer.updatedAt)}
+                    </span>
+                  </div>
+
+                  {burnStep?.explorerUrl || mintStep?.explorerUrl ? (
+                    <div className="grid gap-2">
+                      {burnStep?.explorerUrl ? (
+                        <Button asChild size="sm" variant="outline" className="w-full">
+                          <a
+                            href={burnStep.explorerUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            View burn tx
+                          </a>
+                        </Button>
+                      ) : null}
+                      {mintStep?.explorerUrl ? (
+                        <Button asChild size="sm" variant="outline" className="w-full">
+                          <a
+                            href={mintStep.explorerUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            View mint tx
+                          </a>
+                        </Button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -996,34 +1548,34 @@ export function BridgeScreen() {
         <Card className="glass-card border-border/40">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-primary" />
-              Current Behavior
+              <Route className="h-4 w-4 text-primary" />
+              CCTP flow
             </CardTitle>
             <CardDescription>
-              Live treasury-assisted bridge execution, not a placeholder.
+              The bridge runs through three Circle-controlled stages.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground/80">
-            <p>This page now uses Circle Bridge Kit and the official Circle Wallets adapter on the server.</p>
-            <p>It burns USDC from the app treasury wallet on the opposite chain and forwards the destination mint to the address you enter.</p>
-            <p>It pre-fills the destination with your Arc or Sepolia Circle wallet when available.</p>
+            <p>1. Burn USDC on the source chain treasury wallet.</p>
+            <p>2. Wait for Circle attestation.</p>
+            <p>3. Mint USDC on the destination chain for the wallet you entered.</p>
           </CardContent>
         </Card>
 
         <Card className="glass-card border-border/40">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Route className="h-4 w-4 text-primary" />
-              Treasury Model
+              <Clock3 className="h-4 w-4 text-primary" />
+              Tracking
             </CardTitle>
             <CardDescription>
-              Important constraints in the current flow.
+              This bridge is non-blocking by design.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground/80">
-            <p>This is still a server-orchestrated bridge, so the source wallet is an app-owned Circle developer-controlled wallet on the backend.</p>
-            <p>Only USDC is supported today, so EURC is intentionally hidden from this bridge experience.</p>
-            <p>The selected route still needs a funded app treasury wallet before the bridge can settle.</p>
+            <p>Status refreshes every 4 seconds while a bridge is pending.</p>
+            <p>The latest transfer is stored locally so the page can resume after refresh.</p>
+            <p>If the flow runs longer than 2 minutes, the UI tells the user it is still processing on-chain.</p>
           </CardContent>
         </Card>
       </div>
@@ -1038,7 +1590,9 @@ export function BridgeScreen() {
             <DialogHeader className="space-y-2">
               <DialogTitle className="text-xl">Review bridge transfer</DialogTitle>
               <DialogDescription>
-                This bridge uses the app treasury wallet on the backend, so no Circle wallet signature popup will appear from your personal wallet.
+                This bridge uses the app treasury wallet on the backend, so no
+                Circle wallet signature popup will appear from your personal
+                wallet.
               </DialogDescription>
             </DialogHeader>
 
@@ -1071,7 +1625,9 @@ export function BridgeScreen() {
               </div>
 
               <div className="rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-                Continue if this destination and route are correct. The app treasury wallet will execute the bridge and the result will appear here after settlement.
+                Circle burn, attestation, and mint can take a while. The progress
+                tracker will keep updating after you submit, and you can leave the
+                page at any time.
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row">
@@ -1095,7 +1651,7 @@ export function BridgeScreen() {
                   ) : (
                     <Route className="h-4 w-4" />
                   )}
-                  {isSubmitting ? "Submitting bridge..." : "Continue bridge"}
+                  {isSubmitting ? "Starting bridge..." : "Start bridge"}
                 </Button>
               </div>
             </div>
@@ -1111,9 +1667,9 @@ export function BridgeScreen() {
               <CheckCircle2 className="h-7 w-7" />
             </div>
             <DialogHeader className="space-y-2">
-              <DialogTitle className="text-xl">Bridge settled successfully</DialogTitle>
+              <DialogTitle className="text-xl">Bridge completed</DialogTitle>
               <DialogDescription>
-                The app treasury wallet completed the bridge and Circle returned a successful result.
+                Circle finished the bridge and the destination mint is confirmed.
               </DialogDescription>
             </DialogHeader>
 
@@ -1123,7 +1679,7 @@ export function BridgeScreen() {
                   <div className="flex items-center justify-between gap-3 text-sm">
                     <span className="text-muted-foreground/70">Route</span>
                     <span className="font-medium">
-                      {sourceOption.label} to {destinationOption.label}
+                      {transferSourceOption.label} to {transferDestinationOption.label}
                     </span>
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3 text-sm">
@@ -1140,37 +1696,42 @@ export function BridgeScreen() {
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3 text-sm">
                     <span className="text-muted-foreground/70">Transfer ID</span>
-                    <span className="font-mono font-medium">
+                    <span className="font-mono text-xs">
                       {shortenAddress(transfer.transferId)}
                     </span>
                   </div>
-                  <div className="mt-3 flex items-center justify-between gap-3 text-sm">
-                    <span className="text-muted-foreground/70">Status</span>
-                    <span className="font-medium capitalize">{transfer.status}</span>
-                  </div>
                 </div>
 
-                <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground/80">
-                  No Circle wallet popup was required because this route is treasury-assisted. You can review the full transfer details in the status panel on the right.
-                </div>
-
-                <div className="flex flex-col gap-3 sm:flex-row">
-                  {latestExplorerStep?.explorerUrl ? (
-                    <Button asChild className="flex-1">
-                      <a href={latestExplorerStep.explorerUrl} target="_blank" rel="noreferrer">
+                <div className="grid gap-2">
+                  {burnStep?.explorerUrl ? (
+                    <Button asChild variant="outline" className="w-full">
+                      <a
+                        href={burnStep.explorerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         <ExternalLink className="h-4 w-4" />
-                        View {latestExplorerStep.name}
+                        View burn tx
                       </a>
                     </Button>
                   ) : null}
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => setIsSuccessDialogOpen(false)}
-                  >
-                    Close
-                  </Button>
+                  {mintStep?.explorerUrl ? (
+                    <Button asChild variant="outline" className="w-full">
+                      <a
+                        href={mintStep.explorerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        View mint tx
+                      </a>
+                    </Button>
+                  ) : null}
                 </div>
+
+                <Button className="w-full" onClick={() => setIsSuccessDialogOpen(false)}>
+                  Close
+                </Button>
               </div>
             ) : null}
           </div>

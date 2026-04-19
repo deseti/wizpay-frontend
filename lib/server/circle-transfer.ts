@@ -11,6 +11,13 @@ import type {
   Wallet,
 } from "@circle-fin/developer-controlled-wallets";
 
+import {
+  getWalletAddressByChain,
+  getWalletEnvName,
+  getWalletIdByChain,
+  getWalletSetIdByChain,
+} from "@/lib/server/circle-wallet-mapping";
+
 export type CircleTransferBlockchain = "ARC-TESTNET" | "ETH-SEPOLIA";
 
 export interface CircleTransferWalletBalance {
@@ -90,12 +97,19 @@ interface StoredTransferMetadata {
   walletId: string | null;
 }
 
+interface ChainWalletConfig {
+  walletSetId: string;
+  walletId: string;
+  walletAddress: string;
+}
+
 interface CircleTransferConfig {
   circleApiKey: string;
   circleEntitySecret: string;
-  circleWalletSetId: string;
-  circleWalletId: string;
-  circleWalletAddress: string;
+  legacyCircleWalletSetId: string;
+  legacyCircleWalletId: string;
+  legacyCircleWalletAddress: string;
+  chainWallets: Record<CircleTransferBlockchain, ChainWalletConfig>;
   circleWalletsBaseUrl: string;
   defaultBlockchain: CircleTransferBlockchain;
   defaultTokenAddress: string;
@@ -106,15 +120,23 @@ export interface CircleTransferRuntimeDebugConfig {
   apiKeyFingerprint: string | null;
   apiKeyLength: number;
   apiKeyPrefix: string | null;
-  circleWalletAddress: string | null;
-  circleWalletId: string | null;
-  circleWalletSetId: string | null;
+  chainWallets: Record<
+    CircleTransferBlockchain,
+    {
+      walletAddress: string | null;
+      walletId: string | null;
+      walletSetId: string | null;
+    }
+  >;
   circleWalletsBaseUrl: string;
   defaultBlockchain: CircleTransferBlockchain;
   defaultFeeLevel: FeeLevel;
   defaultTokenAddress: string;
   entitySecretFingerprint: string | null;
   entitySecretLength: number;
+  legacyCircleWalletAddress: string | null;
+  legacyCircleWalletId: string | null;
+  legacyCircleWalletSetId: string | null;
 }
 
 export interface CircleTransferRuntimeDebugSnapshot {
@@ -132,7 +154,10 @@ export interface CircleTransferRuntimeDebugSnapshot {
     walletId: string | null;
     walletSetId: string | null;
   }>;
-  runtimeWalletSetId: string | null;
+  runtimeWalletSetIds: Array<{
+    blockchain: CircleTransferBlockchain;
+    walletSetId: string;
+  }>;
 }
 
 const SUPPORTED_BLOCKCHAINS = new Set<CircleTransferBlockchain>([
@@ -149,10 +174,10 @@ const DEFAULT_WALLET_SET_NAME = "WizPay Transfer Wallet Set";
 const DEFAULT_WALLET_NAME_PREFIX = "WizPay Transfer Wallet";
 const transferMetadata = new Map<string, StoredTransferMetadata>();
 const runtimeWallets = new Map<CircleTransferBlockchain, ResolvedWalletConfig>();
+const runtimeWalletSetIds = new Map<CircleTransferBlockchain, string>();
 
 let circleWalletClient: CircleDeveloperControlledWalletsClient | null = null;
 let circleWalletClientDebugConfig: CircleTransferRuntimeDebugConfig | null = null;
-let runtimeWalletSetId: string | null = null;
 
 export class CircleTransferError extends Error {
   constructor(
@@ -184,6 +209,7 @@ export async function bootstrapTransferWallet(
   input: BootstrapCircleTransferWalletInput = {}
 ): Promise<CircleTransferWallet> {
   const client = getCircleWalletClient();
+  const config = getConfig();
   const blockchain = normalizeBlockchain(input.blockchain);
   const tokenAddress = input.tokenAddress || getDefaultTokenAddress(blockchain);
   const discoveredWallet = await discoverWalletAcrossWalletSets(client, blockchain);
@@ -193,21 +219,28 @@ export async function bootstrapTransferWallet(
   }
 
   let walletSetId =
-    input.walletSetId || getConfig().circleWalletSetId || runtimeWalletSetId;
+    input.walletSetId ||
+    config.chainWallets[blockchain].walletSetId ||
+    config.legacyCircleWalletSetId ||
+    runtimeWalletSetIds.get(blockchain) ||
+    null;
 
   if (walletSetId) {
     const existingWallet = await getFirstWalletInSet(client, walletSetId, blockchain);
 
     if (existingWallet) {
       const resolvedWallet = rememberWallet(existingWallet);
-      runtimeWalletSetId = existingWallet.walletSetId || walletSetId;
+      runtimeWalletSetIds.set(
+        blockchain,
+        existingWallet.walletSetId || walletSetId
+      );
       return buildWalletRecord(resolvedWallet, tokenAddress);
     }
   }
 
   if (!walletSetId) {
     walletSetId = await createWalletSet(client, input.walletSetName);
-    runtimeWalletSetId = walletSetId;
+    runtimeWalletSetIds.set(blockchain, walletSetId);
   }
 
   const walletResponse = await wrapCircleCall(
@@ -238,7 +271,7 @@ export async function bootstrapTransferWallet(
     );
   }
 
-  runtimeWalletSetId = walletSetId;
+  runtimeWalletSetIds.set(blockchain, walletSetId);
 
   return buildWalletRecord(rememberWallet(wallet), tokenAddress);
 }
@@ -390,7 +423,12 @@ export function getCircleTransferRuntimeDebugSnapshot(): CircleTransferRuntimeDe
       walletId: wallet.walletId,
       walletSetId: wallet.walletSetId,
     })),
-    runtimeWalletSetId,
+    runtimeWalletSetIds: Array.from(runtimeWalletSetIds.entries()).map(
+      ([blockchain, walletSetId]) => ({
+        blockchain,
+        walletSetId,
+      })
+    ),
   };
 }
 
@@ -444,10 +482,24 @@ function getConfig(): CircleTransferConfig {
     circleApiKey: normalizeOptionalString(process.env.CIRCLE_API_KEY) || "",
     circleEntitySecret:
       normalizeOptionalString(process.env.CIRCLE_ENTITY_SECRET) || "",
-    circleWalletSetId: normalizeOptionalString(process.env.CIRCLE_WALLET_SET_ID) || "",
-    circleWalletId: normalizeOptionalString(process.env.CIRCLE_WALLET_ID) || "",
-    circleWalletAddress:
+    legacyCircleWalletSetId:
+      normalizeOptionalString(process.env.CIRCLE_WALLET_SET_ID) || "",
+    legacyCircleWalletId:
+      normalizeOptionalString(process.env.CIRCLE_WALLET_ID) || "",
+    legacyCircleWalletAddress:
       normalizeOptionalString(process.env.CIRCLE_WALLET_ADDRESS) || "",
+    chainWallets: {
+      "ARC-TESTNET": {
+        walletSetId: getWalletSetIdByChain("ARC-TESTNET"),
+        walletId: getWalletIdByChain("ARC-TESTNET"),
+        walletAddress: getWalletAddressByChain("ARC-TESTNET"),
+      },
+      "ETH-SEPOLIA": {
+        walletSetId: getWalletSetIdByChain("ETH-SEPOLIA"),
+        walletId: getWalletIdByChain("ETH-SEPOLIA"),
+        walletAddress: getWalletAddressByChain("ETH-SEPOLIA"),
+      },
+    },
     circleWalletsBaseUrl: normalizedCircleWalletsBaseUrl,
     defaultBlockchain: normalizeBlockchain(configuredBlockchain),
     defaultTokenAddress:
@@ -465,15 +517,47 @@ function toRuntimeDebugConfig(
     apiKeyFingerprint: fingerprintValue(config.circleApiKey),
     apiKeyLength: config.circleApiKey.length,
     apiKeyPrefix: extractApiKeyPrefix(config.circleApiKey),
-    circleWalletAddress: normalizeOptionalString(config.circleWalletAddress) || null,
-    circleWalletId: normalizeOptionalString(config.circleWalletId) || null,
-    circleWalletSetId: normalizeOptionalString(config.circleWalletSetId) || null,
+    chainWallets: {
+      "ARC-TESTNET": {
+        walletAddress:
+          normalizeOptionalString(
+            config.chainWallets["ARC-TESTNET"].walletAddress
+          ) || null,
+        walletId:
+          normalizeOptionalString(config.chainWallets["ARC-TESTNET"].walletId) ||
+          null,
+        walletSetId:
+          normalizeOptionalString(
+            config.chainWallets["ARC-TESTNET"].walletSetId
+          ) || null,
+      },
+      "ETH-SEPOLIA": {
+        walletAddress:
+          normalizeOptionalString(
+            config.chainWallets["ETH-SEPOLIA"].walletAddress
+          ) || null,
+        walletId:
+          normalizeOptionalString(
+            config.chainWallets["ETH-SEPOLIA"].walletId
+          ) || null,
+        walletSetId:
+          normalizeOptionalString(
+            config.chainWallets["ETH-SEPOLIA"].walletSetId
+          ) || null,
+      },
+    },
     circleWalletsBaseUrl: config.circleWalletsBaseUrl,
     defaultBlockchain: config.defaultBlockchain,
     defaultFeeLevel: config.defaultFeeLevel,
     defaultTokenAddress: config.defaultTokenAddress,
     entitySecretFingerprint: fingerprintValue(config.circleEntitySecret),
     entitySecretLength: config.circleEntitySecret.length,
+    legacyCircleWalletAddress:
+      normalizeOptionalString(config.legacyCircleWalletAddress) || null,
+    legacyCircleWalletId:
+      normalizeOptionalString(config.legacyCircleWalletId) || null,
+    legacyCircleWalletSetId:
+      normalizeOptionalString(config.legacyCircleWalletSetId) || null,
   };
 }
 
@@ -515,12 +599,35 @@ async function resolveWalletConfig(
   const blockchain = normalizeBlockchain(overrides.blockchain);
   const requestedWalletId = normalizeOptionalString(overrides.walletId);
   const requestedWalletAddress = normalizeOptionalString(overrides.walletAddress);
+  const chainWalletConfig = config.chainWallets[blockchain];
   const rememberedWallet = runtimeWallets.get(blockchain);
-  const walletSetId = config.circleWalletSetId || runtimeWalletSetId;
+  const walletSetId =
+    chainWalletConfig.walletSetId ||
+    config.legacyCircleWalletSetId ||
+    runtimeWalletSetIds.get(blockchain) ||
+    null;
   let configuredWalletSetWasChecked = false;
+  let shouldIgnoreRequestedWalletAddress = false;
 
   if (requestedWalletId) {
-    return rememberWallet(await getWalletById(client, requestedWalletId));
+    const requestedWallet = await getWalletById(client, requestedWalletId);
+
+    if (walletMatchesBlockchain(requestedWallet, blockchain)) {
+      return rememberWallet(requestedWallet);
+    }
+
+    shouldIgnoreRequestedWalletAddress = true;
+  }
+
+  if (chainWalletConfig.walletId) {
+    const chainWallet = await getWalletById(client, chainWalletConfig.walletId);
+    return rememberWallet(
+      assertConfiguredWalletMatchesChain(
+        chainWallet,
+        blockchain,
+        getWalletEnvName("CIRCLE_WALLET_ID", blockchain)
+      )
+    );
   }
 
   if (rememberedWallet) {
@@ -531,23 +638,33 @@ async function resolveWalletConfig(
     const wallet = await getFirstWalletInSet(client, walletSetId, blockchain);
 
     if (wallet) {
-      runtimeWalletSetId = wallet.walletSetId || walletSetId;
+      runtimeWalletSetIds.set(blockchain, wallet.walletSetId || walletSetId);
       return rememberWallet(wallet);
     }
 
     configuredWalletSetWasChecked = true;
   }
 
-  if (config.circleWalletId) {
-    const wallet = await getWalletById(client, config.circleWalletId);
-    return rememberWallet(wallet);
+  if (config.legacyCircleWalletId) {
+    const wallet = await getWalletById(client, config.legacyCircleWalletId);
+
+    if (walletMatchesBlockchain(wallet, blockchain)) {
+      return rememberWallet(wallet);
+    }
   }
 
-  if (requestedWalletAddress || config.circleWalletAddress) {
+  if (
+    (!shouldIgnoreRequestedWalletAddress && requestedWalletAddress) ||
+    chainWalletConfig.walletAddress ||
+    config.legacyCircleWalletAddress
+  ) {
     return {
       walletSetId: null,
       walletId: null,
-      walletAddress: requestedWalletAddress || config.circleWalletAddress,
+      walletAddress:
+        (!shouldIgnoreRequestedWalletAddress && requestedWalletAddress) ||
+        chainWalletConfig.walletAddress ||
+        config.legacyCircleWalletAddress,
       blockchain,
     };
   }
@@ -580,10 +697,46 @@ async function resolveWalletConfig(
   }
 
   throw new CircleTransferError(
-    "Circle transfer wallet is not configured. Bootstrap a transfer wallet for this chain or set CIRCLE_WALLET_ID, CIRCLE_WALLET_ADDRESS, or CIRCLE_WALLET_SET_ID on the server.",
+    `Circle transfer wallet is not configured for ${blockchain}. Bootstrap a transfer wallet for this chain or set ${getWalletEnvName("CIRCLE_WALLET_ID", blockchain)}, ${getWalletEnvName("CIRCLE_WALLET_ADDRESS", blockchain)}, or ${getWalletEnvName("CIRCLE_WALLET_SET_ID", blockchain)} on the server.`,
     503,
     "CIRCLE_WALLET_CONFIG_MISSING",
     { blockchain }
+  );
+}
+
+function walletMatchesBlockchain(
+  wallet: Wallet,
+  blockchain: CircleTransferBlockchain
+) {
+  try {
+    return normalizeBlockchain(String(wallet.blockchain)) === blockchain;
+  } catch {
+    return false;
+  }
+}
+
+function assertConfiguredWalletMatchesChain(
+  wallet: Wallet,
+  blockchain: CircleTransferBlockchain,
+  envName: string
+) {
+  const walletBlockchain = normalizeBlockchain(String(wallet.blockchain));
+
+  if (walletBlockchain === blockchain) {
+    return wallet;
+  }
+
+  throw new CircleTransferError(
+    `Configured Circle wallet ${wallet.id} from ${envName} is on ${walletBlockchain}, but ${blockchain} was requested. Fix the per-chain treasury wallet mapping before retrying.`,
+    503,
+    "CIRCLE_WALLET_CHAIN_MISMATCH",
+    {
+      blockchain,
+      configuredEnv: envName,
+      walletAddress: wallet.address,
+      walletBlockchain,
+      walletId: wallet.id,
+    }
   );
 }
 
@@ -784,7 +937,7 @@ function rememberWallet(wallet: Wallet): ResolvedWalletConfig {
   runtimeWallets.set(resolvedWallet.blockchain, resolvedWallet);
 
   if (resolvedWallet.walletSetId) {
-    runtimeWalletSetId = resolvedWallet.walletSetId;
+    runtimeWalletSetIds.set(resolvedWallet.blockchain, resolvedWallet.walletSetId);
   }
 
   return resolvedWallet;

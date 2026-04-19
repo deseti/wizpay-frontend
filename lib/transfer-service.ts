@@ -1,4 +1,5 @@
 export interface CircleTransferStep {
+  id: string;
   name: string;
   state: "pending" | "success" | "error" | "noop";
   txHash: string | null;

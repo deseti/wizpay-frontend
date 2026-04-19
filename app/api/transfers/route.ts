@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       blockchain,
     });
 
-    return NextResponse.json({ data: transfer }, { status: 201 });
+    return NextResponse.json({ data: transfer }, { status: 202 });
   } catch (error) {
     return toErrorResponse(error);
   }
