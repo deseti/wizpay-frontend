@@ -11,7 +11,8 @@ import {
 } from "react";
 import { deleteCookie, getCookie, setCookie } from "cookies-next";
 import { SocialLoginProvider } from "@circle-fin/w3s-pw-web-sdk/dist/src/types";
-import { LogIn, Mail, ShieldCheck, Wallet } from "lucide-react";
+import { Fingerprint, LogIn, Mail, ShieldCheck, Wallet } from "lucide-react";
+import type { Address, Hex } from "viem";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -22,8 +23,27 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  clearStoredPasskeyCredential,
+  createPasskeyRuntimeSet,
+  getCirclePasskeyConfig,
+  getPasskeySupportError,
+  getPasskeyTokenBalances,
+  loginWithPasskey,
+  readStoredPasskeyCredential,
+  readStoredPasskeyUsername,
+  registerWithPasskey,
+  sendPasskeyUserOperation,
+  signPasskeyTypedData,
+  storePasskeyCredential,
+  storePasskeyUsername,
+  type PasskeyChainRuntime,
+  type PasskeyRuntimeSet,
+} from "@/lib/circle-passkey";
 
-type LoginMethod = "google" | "email";
+type LoginMethod = "google" | "email" | "passkey";
+
+type W3SLoginMethod = Extract<LoginMethod, "google" | "email">;
 
 type CircleUserWallet = {
   id: string;
@@ -33,18 +53,40 @@ type CircleUserWallet = {
   [key: string]: unknown;
 };
 
-type CircleSession = {
-  authMethod: LoginMethod;
+type CircleW3SSession = {
+  authMethod: W3SLoginMethod;
   email: string | null;
   encryptionKey: string;
   refreshToken?: string;
   userToken: string;
 };
 
+type CirclePasskeySession = {
+  authMethod: "passkey";
+  email: null;
+  passkeyUsername: string | null;
+};
+
+type CircleSession = CircleW3SSession | CirclePasskeySession;
+
 type CircleChallengeHandle = {
   challengeId: string;
   raw: Record<string, unknown>;
 };
+
+type CirclePasskeyChallenge =
+  | {
+      callData: Hex;
+      contractAddress: Address;
+      kind: "contract";
+      referenceId: string | null;
+      walletId: string;
+    }
+  | {
+      kind: "typed-data";
+      typedDataJson: string;
+      walletId: string;
+    };
 
 type CircleWalletTokenBalance = {
   amount: string;
@@ -57,7 +99,7 @@ type CircleWalletTokenBalance = {
 type StoredLoginConfig = {
   email?: string | null;
   loginConfigs: Record<string, unknown>;
-  loginMethod: LoginMethod;
+  loginMethod: W3SLoginMethod;
 };
 
 type GoogleOAuthDiagnostics = {
@@ -102,6 +144,7 @@ type W3SLoginCompleteResult = {
 
 type CircleWalletContextValue = {
   arcWallet: CircleUserWallet | null;
+  authMethod: LoginMethod | null;
   authError: string | null;
   authStatus: string | null;
   authenticated: boolean;
@@ -124,6 +167,8 @@ type CircleWalletContextValue = {
   refreshWallets: () => Promise<void>;
   requestEmailOtp: (email: string) => Promise<void>;
   requestGoogleLogin: () => Promise<void>;
+  requestPasskeyLogin: () => Promise<void>;
+  requestPasskeyRegistration: (username: string) => Promise<void>;
   sepoliaWallet: CircleUserWallet | null;
   userEmail: string | null;
   verifyEmailOtp: () => void;
@@ -132,6 +177,7 @@ type CircleWalletContextValue = {
 
 const CIRCLE_APP_ID = process.env.NEXT_PUBLIC_CIRCLE_APP_ID ?? "";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const PASSKEY_CONFIG = getCirclePasskeyConfig();
 const APP_ID_COOKIE_KEY = "wizpay.circle.app-id";
 const DEVICE_ID_STORAGE_KEY = "wizpay.circle.device-id";
 const DEVICE_ENCRYPTION_KEY_COOKIE_KEY = "deviceEncryptionKey";
@@ -252,6 +298,32 @@ function isW3SLoginCompleteResult(
     (typeof value.refreshToken === "string" ||
       typeof value.refreshToken === "undefined")
   );
+}
+
+function isPasskeySession(
+  value: CircleSession | null | undefined
+): value is CirclePasskeySession {
+  return value?.authMethod === "passkey";
+}
+
+function isHexValue(
+  value: unknown,
+  expectedBytes?: number
+): value is `0x${string}` {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const sizePattern = expectedBytes ? `{${expectedBytes * 2}}` : "*";
+  return new RegExp(`^0x[a-fA-F0-9]${sizePattern}$`).test(value);
+}
+
+function createLocalChallengeId(prefix: string) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}:${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}:${Math.random().toString(36).slice(2)}:${Date.now().toString(36)}`;
 }
 
 function getNestedString(source: unknown, path: string[]) {
@@ -804,6 +876,12 @@ export function CircleWalletProvider({
   const loginConfigRef = useRef<StoredLoginConfig | null>(null);
   const googleOAuthDiagnosticsRef = useRef<GoogleOAuthDiagnostics | null>(null);
   const authRequestInFlightRef = useRef(false);
+  const passkeyChallengeStoreRef = useRef(
+    new Map<string, CirclePasskeyChallenge>()
+  );
+  const passkeyRuntimeByWalletIdRef = useRef(
+    new Map<string, PasskeyChainRuntime>()
+  );
 
   const [arcWallet, setArcWallet] = useState<CircleUserWallet | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -812,6 +890,9 @@ export function CircleWalletProvider({
   const [hasPendingEmailOtp, setHasPendingEmailOtp] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [passkeyUnavailableReason, setPasskeyUnavailableReason] = useState<
+    string | null
+  >(null);
   const [ready, setReady] = useState(false);
   const [sepoliaWallet, setSepoliaWallet] = useState<CircleUserWallet | null>(null);
   const [session, setSession] = useState<CircleSession | null>(null);
@@ -912,9 +993,149 @@ export function CircleWalletProvider({
     setHasPendingEmailOtp(value.loginMethod === "email");
   }, []);
 
+  const applyPasskeyRuntimeSet = useCallback((runtimeSet: PasskeyRuntimeSet | null) => {
+    passkeyRuntimeByWalletIdRef.current = runtimeSet?.byWalletId ?? new Map();
+
+    const nextWallets = (runtimeSet?.wallets ?? []) as CircleUserWallet[];
+
+    setWallets(nextWallets);
+    setArcWallet((runtimeSet?.arc?.wallet as CircleUserWallet | null) ?? null);
+    setSepoliaWallet(
+      (runtimeSet?.sepolia?.wallet as CircleUserWallet | null) ?? null
+    );
+  }, []);
+
+  const resetPasskeyRuntimeState = useCallback(() => {
+    passkeyChallengeStoreRef.current.clear();
+    passkeyRuntimeByWalletIdRef.current.clear();
+  }, []);
+
+  const clearPasskeyState = useCallback(() => {
+    resetPasskeyRuntimeState();
+    clearStoredPasskeyCredential();
+    storePasskeyUsername(null);
+  }, [resetPasskeyRuntimeState]);
+
+  const initializePasskeyWallets = useCallback(
+    async ({
+      credential,
+      username,
+    }: {
+      credential?: ReturnType<typeof readStoredPasskeyCredential>;
+      username: string | null;
+    }) => {
+      const nextCredential = credential ?? readStoredPasskeyCredential();
+
+      if (!nextCredential) {
+        throw new Error(
+          "No stored passkey credential was found. Sign in with Passkey again."
+        );
+      }
+
+      const runtimeSet = await createPasskeyRuntimeSet({
+        config: PASSKEY_CONFIG,
+        credential: nextCredential,
+        username,
+      });
+
+      applyPasskeyRuntimeSet(runtimeSet);
+
+      return runtimeSet;
+    },
+    [applyPasskeyRuntimeSet]
+  );
+
+  const finalizePasskeyAuthentication = useCallback(
+    async ({
+      credential,
+      username,
+    }: {
+      credential: NonNullable<ReturnType<typeof readStoredPasskeyCredential>>;
+      username: string | null;
+    }) => {
+      const nextUsername = username ?? readStoredPasskeyUsername();
+
+      await initializePasskeyWallets({
+        credential,
+        username: nextUsername,
+      });
+
+      storePasskeyCredential(credential);
+      storePasskeyUsername(nextUsername);
+
+      const nextSession: CirclePasskeySession = {
+        authMethod: "passkey",
+        email: null,
+        passkeyUsername: nextUsername,
+      };
+
+      setSession(nextSession);
+      persistSession(nextSession);
+      clearCircleOAuthState();
+      clearStoredLoginConfig({ preserveGoogleCookies: true });
+      setAuthStatus("Circle passkey wallet ready.");
+      setIsLoginOpen(false);
+    },
+    [clearStoredLoginConfig, initializePasskeyWallets, persistSession]
+  );
+
+  const executePasskeyChallenge = useCallback(async (challengeId: string) => {
+    const pendingChallenge = passkeyChallengeStoreRef.current.get(challengeId);
+
+    if (!pendingChallenge) {
+      throw new Error("Passkey request expired. Retry the action.");
+    }
+
+    const runtime = passkeyRuntimeByWalletIdRef.current.get(
+      pendingChallenge.walletId
+    );
+
+    if (!runtime) {
+      throw new Error("Passkey wallet session is not ready.");
+    }
+
+    try {
+      if (pendingChallenge.kind === "contract") {
+        const result = await sendPasskeyUserOperation({
+          callData: pendingChallenge.callData,
+          contractAddress: pendingChallenge.contractAddress,
+          runtime,
+        });
+        const referenceId = pendingChallenge.referenceId ?? result.userOpHash;
+
+        return {
+          data: {
+            id: referenceId,
+            transactionHash: result.txHash,
+            transactionId: referenceId,
+            txHash: result.txHash,
+            userOpHash: result.userOpHash,
+          },
+          id: referenceId,
+          transactionHash: result.txHash,
+          transactionId: referenceId,
+          txHash: result.txHash,
+          userOpHash: result.userOpHash,
+        };
+      }
+
+      const signature = await signPasskeyTypedData({
+        runtime,
+        typedDataJson: pendingChallenge.typedDataJson,
+      });
+
+      return {
+        data: { signature },
+        signature,
+      };
+    } finally {
+      passkeyChallengeStoreRef.current.delete(challengeId);
+    }
+  }, []);
+
   const handleAuthFailureRef = useRef<((error: unknown) => void) | null>(null);
   const initializeAndLoadWalletsRef = useRef<
-    ((authSession: CircleSession) => Promise<void>) | null
+    ((authSession: CircleW3SSession) => Promise<void>) | null
   >(null);
   const persistSessionRef = useRef<((nextSession: CircleSession | null) => void) | null>(
     null
@@ -963,13 +1184,33 @@ export function CircleWalletProvider({
   );
 
   const loadWallets = useCallback(
-    async (userTokenOverride?: string) => {
-      const userToken = userTokenOverride ?? session?.userToken;
+    async (authSessionOverride?: CircleSession | null) => {
+      const activeSession = authSessionOverride ?? session;
+
+      if (isPasskeySession(activeSession)) {
+        const storedCredential = readStoredPasskeyCredential();
+
+        if (!storedCredential) {
+          throw new Error(
+            "Your saved passkey session is incomplete. Sign in with Passkey again."
+          );
+        }
+
+        await initializePasskeyWallets({
+          credential: storedCredential,
+          username: activeSession.passkeyUsername,
+        });
+
+        return;
+      }
+
+      const userToken = activeSession?.userToken;
 
       if (!userToken) {
         setWallets([]);
         setArcWallet(null);
         setSepoliaWallet(null);
+        resetPasskeyRuntimeState();
         return;
       }
 
@@ -991,11 +1232,15 @@ export function CircleWalletProvider({
         nextWallets.find((wallet) => wallet.blockchain === "ETH-SEPOLIA") ?? null
       );
     },
-    [postW3sAction, session?.userToken]
+    [initializePasskeyWallets, postW3sAction, resetPasskeyRuntimeState, session]
   );
 
   const executeChallengeForSession = useCallback(
     async (challengeId: string, authSession: CircleSession) => {
+      if (isPasskeySession(authSession)) {
+        return executePasskeyChallenge(challengeId);
+      }
+
       const sdk = sdkRef.current;
 
       if (!sdk) {
@@ -1018,11 +1263,11 @@ export function CircleWalletProvider({
         });
       });
     },
-    []
+    [executePasskeyChallenge]
   );
 
   const initializeAndLoadWallets = useCallback(
-    async (authSession: CircleSession) => {
+    async (authSession: CircleW3SSession) => {
       setIsAuthenticating(true);
       setAuthError(null);
       setAuthStatus("Initializing your Circle wallet...");
@@ -1043,7 +1288,7 @@ export function CircleWalletProvider({
         }
 
         setAuthStatus("Loading Circle wallets...");
-        await loadWallets(authSession.userToken);
+        await loadWallets(authSession);
         setAuthStatus("Circle wallet ready.");
         setIsLoginOpen(false);
         clearCircleOAuthBackups();
@@ -1053,7 +1298,7 @@ export function CircleWalletProvider({
 
         if (code === 155106) {
           setAuthStatus("Existing Circle wallet found. Loading wallets...");
-          await loadWallets(authSession.userToken);
+          await loadWallets(authSession);
           setAuthStatus("Circle wallet restored.");
           setIsLoginOpen(false);
           clearCircleOAuthBackups();
@@ -1084,7 +1329,47 @@ export function CircleWalletProvider({
 
   const createContractExecutionChallenge = useCallback(
     async (payload: Record<string, unknown>) => {
-      if (!session?.userToken) {
+      if (isPasskeySession(session)) {
+        const walletId =
+          typeof payload.walletId === "string" && payload.walletId
+            ? payload.walletId
+            : null;
+        const contractAddress = isHexValue(payload.contractAddress, 20)
+          ? (payload.contractAddress as Address)
+          : null;
+        const callData = isHexValue(payload.callData)
+          ? (payload.callData as Hex)
+          : null;
+
+        if (!walletId || !contractAddress || !callData) {
+          throw new Error(
+            "Passkey execution payload is missing the target wallet, contract, or calldata."
+          );
+        }
+
+        const challengeId = createLocalChallengeId("passkey-contract");
+
+        passkeyChallengeStoreRef.current.set(challengeId, {
+          callData,
+          contractAddress,
+          kind: "contract",
+          referenceId:
+            typeof payload.refId === "string" && payload.refId ? payload.refId : null,
+          walletId,
+        });
+
+        return {
+          challengeId,
+          raw: {
+            challengeId,
+            transactionId:
+              typeof payload.refId === "string" && payload.refId ? payload.refId : null,
+            walletId,
+          },
+        };
+      }
+
+      if (!session || isPasskeySession(session) || !session.userToken) {
         throw new Error("Circle session is not available.");
       }
 
@@ -1108,12 +1393,43 @@ export function CircleWalletProvider({
         raw: response,
       };
     },
-    [postW3sAction, session?.userToken]
+    [postW3sAction, session]
   );
 
   const createTypedDataChallenge = useCallback(
     async (payload: Record<string, unknown>) => {
-      if (!session?.userToken) {
+      if (isPasskeySession(session)) {
+        const walletId =
+          typeof payload.walletId === "string" && payload.walletId
+            ? payload.walletId
+            : null;
+        const typedDataJson =
+          typeof payload.data === "string" && payload.data ? payload.data : null;
+
+        if (!walletId || !typedDataJson) {
+          throw new Error(
+            "Passkey typed-data payload is missing the target wallet or payload."
+          );
+        }
+
+        const challengeId = createLocalChallengeId("passkey-typed-data");
+
+        passkeyChallengeStoreRef.current.set(challengeId, {
+          kind: "typed-data",
+          typedDataJson,
+          walletId,
+        });
+
+        return {
+          challengeId,
+          raw: {
+            challengeId,
+            walletId,
+          },
+        };
+      }
+
+      if (!session || isPasskeySession(session) || !session.userToken) {
         throw new Error("Circle session is not available.");
       }
 
@@ -1137,12 +1453,22 @@ export function CircleWalletProvider({
         raw: response,
       };
     },
-    [postW3sAction, session?.userToken]
+    [postW3sAction, session]
   );
 
   const getWalletBalances = useCallback(
     async (walletId: string) => {
-      if (!session?.userToken) {
+      if (isPasskeySession(session)) {
+        const runtime = passkeyRuntimeByWalletIdRef.current.get(walletId);
+
+        if (!runtime) {
+          throw new Error("Passkey wallet session is not ready.");
+        }
+
+        return getPasskeyTokenBalances(runtime);
+      }
+
+      if (!session || isPasskeySession(session) || !session.userToken) {
         throw new Error("Circle session is not available.");
       }
 
@@ -1159,7 +1485,7 @@ export function CircleWalletProvider({
         .map((balance) => normalizeCircleWalletTokenBalance(balance))
         .filter((balance): balance is CircleWalletTokenBalance => balance !== null);
     },
-    [postW3sAction, session?.userToken]
+    [postW3sAction, session]
   );
 
   useEffect(() => {
@@ -1176,6 +1502,10 @@ export function CircleWalletProvider({
       loginConfigRef.current = storedLoginConfig;
       setHasPendingEmailOtp(storedLoginConfig.loginMethod === "email");
     }
+  }, []);
+
+  useEffect(() => {
+    setPasskeyUnavailableReason(getPasskeySupportError(PASSKEY_CONFIG));
   }, []);
 
   useEffect(() => {
@@ -1318,16 +1648,15 @@ export function CircleWalletProvider({
       return;
     }
 
-    const sessionUserToken = session.userToken;
-
     let cancelled = false;
 
     async function hydrateWallets() {
       try {
-        await loadWallets(sessionUserToken);
+        await loadWallets(session);
       } catch (error) {
         if (!cancelled) {
           handleAuthFailure(error);
+          clearPasskeyState();
           setSession(null);
           persistSession(null);
           setWallets([]);
@@ -1344,7 +1673,91 @@ export function CircleWalletProvider({
     return () => {
       cancelled = true;
     };
-  }, [loadWallets, persistSession, session, wallets.length]);
+  }, [clearPasskeyState, loadWallets, persistSession, session, wallets.length]);
+
+  const requestPasskeyRegistration = useCallback(
+    async (username: string) => {
+      const normalizedUsername = username.trim();
+      const supportError = getPasskeySupportError(PASSKEY_CONFIG);
+
+      if (supportError) {
+        setAuthError(supportError);
+        return;
+      }
+
+      if (!normalizedUsername) {
+        setAuthError("Enter a username before creating a passkey.");
+        return;
+      }
+
+      if (authRequestInFlightRef.current) {
+        return;
+      }
+
+      authRequestInFlightRef.current = true;
+      setAuthError(null);
+      setAuthStatus("Creating your Circle passkey...");
+      setIsAuthenticating(true);
+
+      try {
+        resetPasskeyRuntimeState();
+
+        const result = await registerWithPasskey(
+          normalizedUsername,
+          PASSKEY_CONFIG
+        );
+
+        setAuthStatus("Preparing your Circle passkey wallet...");
+        await finalizePasskeyAuthentication({
+          credential: result.credential,
+          username: normalizedUsername,
+        });
+      } catch (error) {
+        resetPasskeyRuntimeState();
+        handleAuthFailure(error);
+      } finally {
+        authRequestInFlightRef.current = false;
+        setIsAuthenticating(false);
+      }
+    },
+    [finalizePasskeyAuthentication, handleAuthFailure, resetPasskeyRuntimeState]
+  );
+
+  const requestPasskeyLogin = useCallback(async () => {
+    const supportError = getPasskeySupportError(PASSKEY_CONFIG);
+
+    if (supportError) {
+      setAuthError(supportError);
+      return;
+    }
+
+    if (authRequestInFlightRef.current) {
+      return;
+    }
+
+    authRequestInFlightRef.current = true;
+    setAuthError(null);
+    setAuthStatus("Opening your passkey prompt...");
+    setIsAuthenticating(true);
+
+    try {
+      resetPasskeyRuntimeState();
+
+      const credential = await loginWithPasskey(PASSKEY_CONFIG);
+
+      setAuthStatus("Restoring your Circle passkey wallet...");
+      await finalizePasskeyAuthentication({
+        credential,
+        username: readStoredPasskeyUsername(),
+      });
+    } catch (error) {
+      resetPasskeyRuntimeState();
+      handleAuthFailure(error);
+    } finally {
+      authRequestInFlightRef.current = false;
+      setIsAuthenticating(false);
+    }
+  }, [finalizePasskeyAuthentication, handleAuthFailure, resetPasskeyRuntimeState]);
 
   const requestGoogleLogin = useCallback(async () => {
     if (!CIRCLE_APP_ID) {
@@ -1556,6 +1969,7 @@ export function CircleWalletProvider({
   const logout = useCallback(() => {
     clearCircleOAuthState();
     clearStoredLoginConfig({ preserveGoogleCookies: true });
+    clearPasskeyState();
     persistSession(null);
     setArcWallet(null);
     setAuthError(null);
@@ -1565,11 +1979,12 @@ export function CircleWalletProvider({
     setSession(null);
     setSepoliaWallet(null);
     setWallets([]);
-  }, [clearStoredLoginConfig, persistSession]);
+  }, [clearPasskeyState, clearStoredLoginConfig, persistSession]);
 
   const value = useMemo<CircleWalletContextValue>(
     () => ({
       arcWallet,
+      authMethod: session?.authMethod ?? null,
       authError,
       authStatus,
       authenticated: Boolean(session),
@@ -1586,6 +2001,8 @@ export function CircleWalletProvider({
           ? "Google"
           : session?.authMethod === "email"
             ? "Email"
+            : session?.authMethod === "passkey"
+              ? "Passkey"
             : "Circle",
       logout,
       primaryWallet: arcWallet ?? sepoliaWallet ?? wallets[0] ?? null,
@@ -1595,6 +2012,8 @@ export function CircleWalletProvider({
       },
       requestEmailOtp,
       requestGoogleLogin,
+      requestPasskeyLogin,
+      requestPasskeyRegistration,
       sepoliaWallet,
       userEmail: session?.email ?? null,
       verifyEmailOtp,
@@ -1615,6 +2034,8 @@ export function CircleWalletProvider({
       ready,
       requestEmailOtp,
       requestGoogleLogin,
+      requestPasskeyLogin,
+      requestPasskeyRegistration,
       sepoliaWallet,
       session,
       verifyEmailOtp,
@@ -1636,7 +2057,10 @@ export function CircleWalletProvider({
         onClose={() => setIsLoginOpen(false)}
         onRequestEmailOtp={requestEmailOtp}
         onRequestGoogleLogin={requestGoogleLogin}
+        onRequestPasskeyLogin={requestPasskeyLogin}
+        onRequestPasskeyRegistration={requestPasskeyRegistration}
         onVerifyEmailOtp={verifyEmailOtp}
+        passkeyUnavailableReason={passkeyUnavailableReason}
       />
     </CircleWalletContext.Provider>
   );
@@ -1653,7 +2077,10 @@ function CircleWalletLoginDialog({
   onClose,
   onRequestEmailOtp,
   onRequestGoogleLogin,
+  onRequestPasskeyLogin,
+  onRequestPasskeyRegistration,
   onVerifyEmailOtp,
+  passkeyUnavailableReason,
 }: {
   authError: string | null;
   authStatus: string | null;
@@ -1665,9 +2092,13 @@ function CircleWalletLoginDialog({
   onClose: () => void;
   onRequestEmailOtp: (email: string) => Promise<void>;
   onRequestGoogleLogin: () => Promise<void>;
+  onRequestPasskeyLogin: () => Promise<void>;
+  onRequestPasskeyRegistration: (username: string) => Promise<void>;
   onVerifyEmailOtp: () => void;
+  passkeyUnavailableReason: string | null;
 }) {
   const [email, setEmail] = useState("");
+  const [passkeyUsername, setPasskeyUsername] = useState("");
 
   return (
     <Dialog
@@ -1675,6 +2106,7 @@ function CircleWalletLoginDialog({
       onOpenChange={(open) => {
         if (!open) {
           setEmail("");
+          setPasskeyUsername("");
           onClose();
         }
       }}
@@ -1688,12 +2120,66 @@ function CircleWalletLoginDialog({
             Connect Circle Wallet
           </DialogTitle>
           <DialogDescription>
-            Sign in with Circle User-Controlled Wallets. The app now creates and
-            restores your wallet directly through Circle instead of Privy.
+            Sign in with Circle using passkeys, Google, or email OTP. Passkey
+            sign-in is bound to app.wizpay.xyz and keeps the Circle wallet session on
+            this device.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5">
+          <div className="rounded-2xl border border-border/40 bg-card/40 p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Fingerprint className="h-4 w-4 text-primary" />
+              <p className="text-sm font-semibold">Passkey</p>
+            </div>
+            <p className="text-sm text-muted-foreground/70">
+              Use a platform passkey on desktop or mobile Chrome to register a new
+              Circle session or restore an existing one.
+            </p>
+            <div className="mt-4 space-y-3">
+              <Input
+                autoCapitalize="none"
+                autoCorrect="off"
+                onChange={(event) => setPasskeyUsername(event.target.value)}
+                placeholder="Choose a passkey username"
+                value={passkeyUsername}
+              />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  disabled={
+                    Boolean(passkeyUnavailableReason) ||
+                    isAuthenticating ||
+                    !passkeyUsername.trim()
+                  }
+                  variant="outline"
+                  onClick={() => {
+                    void onRequestPasskeyRegistration(passkeyUsername);
+                  }}
+                >
+                  Create Passkey
+                </Button>
+                <Button
+                  disabled={Boolean(passkeyUnavailableReason) || isAuthenticating}
+                  onClick={() => {
+                    void onRequestPasskeyLogin();
+                  }}
+                >
+                  Sign in with Passkey
+                </Button>
+              </div>
+            </div>
+            {passkeyUnavailableReason ? (
+              <p className="mt-2 text-xs text-muted-foreground/60">
+                {passkeyUnavailableReason}
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground/60">
+                Works on desktop and Chrome for Android when the app is opened over
+                HTTPS on app.wizpay.xyz.
+              </p>
+            )}
+          </div>
+
           <div className="rounded-2xl border border-border/40 bg-card/40 p-4">
             <div className="mb-3 flex items-center gap-2">
               <LogIn className="h-4 w-4 text-primary" />
