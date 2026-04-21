@@ -13,6 +13,7 @@ import {
   createBundlerClient,
   toWebAuthnAccount,
 } from "viem/account-abstraction";
+import type { Transport } from "viem";
 
 import { ERC20_ABI } from "@/constants/erc20";
 import { TOKEN_OPTIONS } from "@/lib/wizpay";
@@ -43,8 +44,9 @@ export type PasskeyChainRuntime = {
   account: Awaited<ReturnType<typeof toCircleSmartAccount>>;
   bundlerClient: ReturnType<typeof createBundlerClient>;
   chainId: number;
-  modularPublicClient: ReturnType<typeof createPublicClient>;
   readPublicClient: ReturnType<typeof createPublicClient>;
+  transportMode: "circle-modular" | "rpc-fallback";
+  walletPublicClient: ReturnType<typeof createPublicClient>;
   wallet: PasskeyWalletDescriptor;
 };
 
@@ -58,17 +60,17 @@ export type PasskeyRuntimeSet = {
 type PasskeyChainConfig = {
   blockchain: string;
   chain: typeof arcTestnet | typeof ethereumSepolia;
-  modularUrl: string;
+  modularUrl: string | null;
   readRpcUrl: string;
   walletId: string;
 };
 
 export type CirclePasskeyConfig = {
-  arcModularUrl: string;
+  arcModularUrl: string | null;
   clientKey: string;
   clientUrl: string;
   rpId: string;
-  sepoliaModularUrl: string;
+  sepoliaModularUrl: string | null;
 };
 
 export type PasskeyTokenBalance = {
@@ -79,22 +81,73 @@ export type PasskeyTokenBalance = {
   updatedAt: string | null;
 };
 
+function normalizeOptionalUrl(value: string | undefined) {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function getErrorText(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    const directMessage = record.message;
+
+    if (typeof directMessage === "string") {
+      return directMessage;
+    }
+
+    const nestedError = record.error as Record<string, unknown> | undefined;
+
+    if (typeof nestedError?.message === "string") {
+      return nestedError.message;
+    }
+  }
+
+  return "";
+}
+
+function isUnsupportedBlockchainError(error: unknown) {
+  return getErrorText(error)
+    .toLowerCase()
+    .includes("specified blockchain is either not supported or deprecated");
+}
+
+function isBundlerRpcUnavailableError(error: unknown) {
+  const normalized = getErrorText(error).toLowerCase();
+
+  return (
+    normalized.includes("eth_senduseroperation") ||
+    normalized.includes("eth_getuseroperationreceipt") ||
+    normalized.includes("method not found") ||
+    normalized.includes("does not exist") ||
+    normalized.includes("is not available") ||
+    normalized.includes("unsupported")
+  );
+}
+
 export function getCirclePasskeyConfig(): CirclePasskeyConfig {
   const clientUrl =
     process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_CLIENT_URL?.trim() ||
     DEFAULT_CIRCLE_PASSKEY_CLIENT_URL;
 
   return {
-    arcModularUrl:
-      process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_ARC_TESTNET?.trim() ||
-      `${clientUrl}/arcTestnet`,
+    arcModularUrl: normalizeOptionalUrl(
+      process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_ARC_TESTNET
+    ),
     clientKey: process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_CLIENT_KEY?.trim() || "",
     clientUrl,
     rpId:
       process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_RP_ID?.trim() || "app.wizpay.xyz",
-    sepoliaModularUrl:
-      process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_ETH_SEPOLIA?.trim() ||
-      `${clientUrl}/sepolia`,
+    sepoliaModularUrl: normalizeOptionalUrl(
+      process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_ETH_SEPOLIA
+    ),
   };
 }
 
@@ -228,42 +281,72 @@ async function createPasskeyRuntime(
   credential: WebAuthnCredential,
   username: string | null
 ): Promise<PasskeyChainRuntime> {
-  const modularTransport = toModularTransport(
-    chainConfig.modularUrl,
-    config.clientKey
-  );
-  const modularPublicClient = createPublicClient({
-    chain: chainConfig.chain,
-    transport: modularTransport,
-  });
   const readPublicClient = createPublicClient({
     chain: chainConfig.chain,
     transport: http(chainConfig.readRpcUrl),
   });
-  const bundlerClient = createBundlerClient({
-    chain: chainConfig.chain,
-    transport: modularTransport,
-  });
-  const account = await toCircleSmartAccount({
-    client: modularPublicClient,
-    name: username ?? undefined,
-    owner: createPasskeyOwner(credential, config.rpId),
-  });
-  const address = await account.getAddress();
+  const owner = createPasskeyOwner(credential, config.rpId);
 
-  return {
-    account,
-    bundlerClient,
-    chainId: chainConfig.chain.id,
-    modularPublicClient,
-    readPublicClient,
-    wallet: {
-      accountType: "SMART_WALLET",
-      address,
-      blockchain: chainConfig.blockchain,
-      id: chainConfig.walletId,
-    },
+  const buildRuntime = async ({
+    transport,
+    transportMode,
+  }: {
+    transport: Transport;
+    transportMode: PasskeyChainRuntime["transportMode"];
+  }): Promise<PasskeyChainRuntime> => {
+    const walletPublicClient = createPublicClient({
+      chain: chainConfig.chain,
+      transport,
+    });
+    const bundlerClient = createBundlerClient({
+      chain: chainConfig.chain,
+      transport,
+    });
+    const account = await toCircleSmartAccount({
+      client: walletPublicClient,
+      name: username ?? undefined,
+      owner,
+    });
+    const address = await account.getAddress();
+
+    return {
+      account,
+      bundlerClient,
+      chainId: chainConfig.chain.id,
+      readPublicClient,
+      transportMode,
+      wallet: {
+        accountType: "SMART_WALLET",
+        address,
+        blockchain: chainConfig.blockchain,
+        id: chainConfig.walletId,
+      },
+      walletPublicClient,
+    };
   };
+
+  if (chainConfig.modularUrl) {
+    try {
+      const modularTransport = toModularTransport(
+        chainConfig.modularUrl,
+        config.clientKey
+      );
+
+      return await buildRuntime({
+        transport: modularTransport,
+        transportMode: "circle-modular",
+      });
+    } catch (error) {
+      if (!isUnsupportedBlockchainError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return buildRuntime({
+    transport: http(chainConfig.readRpcUrl),
+    transportMode: "rpc-fallback",
+  });
 }
 
 export async function createPasskeyRuntimeSet({
@@ -367,18 +450,31 @@ export async function sendPasskeyUserOperation({
   contractAddress: Address;
   runtime: PasskeyChainRuntime;
 }) {
-  const userOpHash = await runtime.bundlerClient.sendUserOperation({
-    account: runtime.account,
-    calls: [{ data: callData, to: contractAddress }],
-  });
-  const receipt = await runtime.bundlerClient.waitForUserOperationReceipt({
-    hash: userOpHash,
-  });
+  try {
+    const userOpHash = await runtime.bundlerClient.sendUserOperation({
+      account: runtime.account,
+      calls: [{ data: callData, to: contractAddress }],
+    });
+    const receipt = await runtime.bundlerClient.waitForUserOperationReceipt({
+      hash: userOpHash,
+    });
 
-  return {
-    txHash: receipt.receipt.transactionHash,
-    userOpHash,
-  };
+    return {
+      txHash: receipt.receipt.transactionHash,
+      userOpHash,
+    };
+  } catch (error) {
+    if (
+      runtime.transportMode === "rpc-fallback" &&
+      isBundlerRpcUnavailableError(error)
+    ) {
+      throw new Error(
+        `Passkey transactions on ${runtime.wallet.blockchain} require a chain-specific Circle modular RPC URL. Configure the corresponding NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_* value for this chain.`
+      );
+    }
+
+    throw error;
+  }
 }
 
 export async function signPasskeyTypedData({
