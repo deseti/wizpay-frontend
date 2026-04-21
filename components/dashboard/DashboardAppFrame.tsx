@@ -6,14 +6,14 @@ import { ConnectWalletCard } from "@/components/dashboard/ConnectWalletCard";
 import { DashboardBottomNav } from "@/components/dashboard/DashboardBottomNav";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
-import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
+import { useHybridWallet } from "@/components/providers/HybridWalletProvider";
 
 interface DashboardAppFrameProps {
   children: ReactNode;
 }
 
 export function DashboardAppFrame({ children }: DashboardAppFrameProps) {
-  const { authenticated, ready } = useCircleWallet();
+  const { isActiveWalletConnected, isReady } = useHybridWallet();
 
   return (
     <div className="relative flex min-h-screen overflow-hidden bg-background">
@@ -30,7 +30,7 @@ export function DashboardAppFrame({ children }: DashboardAppFrameProps) {
         />
       </div>
 
-      {!ready || !authenticated ? (
+      {!isReady || !isActiveWalletConnected ? (
         <div className="flex h-screen w-full flex-col overflow-y-auto">
           <DashboardHeader />
           <main className="mx-auto flex w-full max-w-7xl flex-1 items-center justify-center px-4 py-8 sm:px-6">

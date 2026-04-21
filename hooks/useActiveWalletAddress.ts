@@ -1,22 +1,23 @@
 "use client";
 
 import type { Address } from "viem";
+import type { WalletMode } from "@/lib/wallet-mode";
 
-import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
+import { useHybridWallet } from "@/components/providers/HybridWalletProvider";
 
 type ActiveWalletAddressResult = {
   isConnected: boolean;
+  walletMode: WalletMode;
   walletAddress: Address | undefined;
 };
 
 export function useActiveWalletAddress(): ActiveWalletAddressResult {
-  const { arcWallet, authenticated, primaryWallet } = useCircleWallet();
-
-  const walletAddress = (arcWallet?.address ??
-    primaryWallet?.address) as Address | undefined;
+  const { activeWalletAddress, isActiveWalletConnected, walletMode } =
+    useHybridWallet();
 
   return {
-    isConnected: authenticated && Boolean(walletAddress),
-    walletAddress,
+    isConnected: isActiveWalletConnected,
+    walletAddress: activeWalletAddress,
+    walletMode,
   };
 }

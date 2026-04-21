@@ -1,5 +1,6 @@
 import { createConfig, http } from "wagmi";
-import { defineChain } from "viem";
+import { injected } from "@wagmi/core";
+import { defineChain, type Chain } from "viem";
 import { sepolia } from "viem/chains";
 
 export const ARC_TESTNET_RPC_URL =
@@ -51,13 +52,32 @@ export const ethereumSepolia = defineChain({
   },
 });
 
+export const SUPPORTED_CHAINS = [arcTestnet, ethereumSepolia] as const;
+export const CHAIN_BY_ID: Record<number, Chain> = {
+  [arcTestnet.id]: arcTestnet,
+  [ethereumSepolia.id]: ethereumSepolia,
+};
+export const CHAIN_NAME_BY_ID: Record<number, string> = {
+  [arcTestnet.id]: arcTestnet.name,
+  [ethereumSepolia.id]: ethereumSepolia.name,
+};
+export const SUPPORTED_CHAIN_IDS = new Set<number>(
+  SUPPORTED_CHAINS.map((chain) => chain.id)
+);
+
+const connectors = [
+  injected({
+    shimDisconnect: true,
+  }),
+];
+
 /**
- * Wagmi configuration for public reads on Arc Testnet and Ethereum Sepolia.
- * Circle user-controlled wallets are handled outside wagmi, while read hooks
- * continue to use wagmi public clients.
+ * Wagmi configuration for both public reads and RainbowKit external wallets.
+ * Circle user-controlled wallets remain isolated behind CircleWalletProvider.
  */
 export const config = createConfig({
-  chains: [arcTestnet, ethereumSepolia],
+  chains: SUPPORTED_CHAINS,
+  connectors,
   ssr: true,
   transports: {
     [arcTestnet.id]: http(ARC_TESTNET_RPC_URL),

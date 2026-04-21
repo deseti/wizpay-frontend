@@ -14,6 +14,7 @@ import {
 import { TOKEN_BY_ADDRESS } from "@/constants/erc20";
 import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import type { EmployeePayment } from "@/lib/dashboard-utils";
+import { arcTestnet } from "@/lib/wagmi";
 
 /**
  * Fetches BatchPaymentRouted events, then inspects Transfer events in each
@@ -23,7 +24,7 @@ import type { EmployeePayment } from "@/lib/dashboard-utils";
  * cannot be resolved (e.g. if the RPC doesn't return receipt logs easily).
  */
 export function useEmployeePayments() {
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { walletAddress } = useActiveWalletAddress();
 
   const query = useQuery({

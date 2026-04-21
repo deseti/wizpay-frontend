@@ -1,25 +1,35 @@
 "use client";
 
 import type { Address } from "viem";
+
 import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
+import { useHybridWallet } from "@/components/providers/HybridWalletProvider";
+import type { WalletMode } from "@/lib/wallet-mode";
 
 interface UseSmartWalletAddressResult {
   smartWalletAddress: Address | undefined;
   embeddedWalletAddress: Address | undefined;
   isLoadingSmartWalletAddress: boolean;
+  walletLabel: string;
+  walletMode: WalletMode;
 }
 
 export function useSmartWalletAddress(): UseSmartWalletAddressResult {
-  const { arcWallet, authenticated, primaryWallet, ready } = useCircleWallet();
-
-  const smartWalletAddress = (arcWallet?.address ??
-    primaryWallet?.address) as Address | undefined;
+  const { authenticated } = useCircleWallet();
+  const {
+    activeWalletAddress,
+    activeWalletLabel,
+    isReady,
+    walletMode,
+  } = useHybridWallet();
   const isLoadingSmartWalletAddress =
-    !ready || (authenticated && !smartWalletAddress);
+    !isReady || (walletMode === "circle" && authenticated && !activeWalletAddress);
 
   return {
-    smartWalletAddress,
+    smartWalletAddress: activeWalletAddress,
     embeddedWalletAddress: undefined,
     isLoadingSmartWalletAddress,
+    walletLabel: activeWalletLabel,
+    walletMode,
   };
 }

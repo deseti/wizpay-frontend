@@ -46,6 +46,14 @@ type CircleChallengeHandle = {
   raw: Record<string, unknown>;
 };
 
+type CircleWalletTokenBalance = {
+  amount: string;
+  raw: Record<string, unknown>;
+  symbol: string | null;
+  tokenAddress: string | null;
+  updatedAt: string | null;
+};
+
 type StoredLoginConfig = {
   email?: string | null;
   loginConfigs: Record<string, unknown>;
@@ -82,8 +90,14 @@ type W3SSdkInstance = {
 type W3SSdkModule = {
   W3SSdk?: new (
     config: Record<string, unknown>,
-    onLoginComplete: (error: unknown, result: any) => void
+    onLoginComplete: (error: unknown, result: unknown) => void
   ) => W3SSdkInstance;
+};
+
+type W3SLoginCompleteResult = {
+  encryptionKey: string;
+  refreshToken?: string;
+  userToken: string;
 };
 
 type CircleWalletContextValue = {
@@ -95,7 +109,11 @@ type CircleWalletContextValue = {
   createContractExecutionChallenge: (
     payload: Record<string, unknown>
   ) => Promise<CircleChallengeHandle>;
+  createTypedDataChallenge: (
+    payload: Record<string, unknown>
+  ) => Promise<CircleChallengeHandle>;
   executeChallenge: (challengeId: string) => Promise<unknown>;
+  getWalletBalances: (walletId: string) => Promise<CircleWalletTokenBalance[]>;
   hasPendingEmailOtp: boolean;
   isAuthenticating: boolean;
   login: () => void;
@@ -114,7 +132,7 @@ type CircleWalletContextValue = {
 
 const CIRCLE_APP_ID = process.env.NEXT_PUBLIC_CIRCLE_APP_ID ?? "";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
-const APP_ID_COOKIE_KEY = "appId";
+const APP_ID_COOKIE_KEY = "wizpay.circle.app-id";
 const DEVICE_ID_STORAGE_KEY = "wizpay.circle.device-id";
 const DEVICE_ENCRYPTION_KEY_COOKIE_KEY = "deviceEncryptionKey";
 const DEVICE_TOKEN_COOKIE_KEY = "deviceToken";
@@ -222,6 +240,18 @@ function getErrorMessage(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isW3SLoginCompleteResult(
+  value: unknown
+): value is W3SLoginCompleteResult {
+  return (
+    isRecord(value) &&
+    typeof value.encryptionKey === "string" &&
+    typeof value.userToken === "string" &&
+    (typeof value.refreshToken === "string" ||
+      typeof value.refreshToken === "undefined")
+  );
 }
 
 function getNestedString(source: unknown, path: string[]) {
@@ -367,6 +397,35 @@ function extractChallengeId(payload: Record<string, unknown>) {
     getNestedString(payload, ["data", "challengeId"]) ??
     getNestedString(payload, ["data", "challenge", "id"])
   );
+}
+
+function normalizeCircleWalletTokenBalance(
+  payload: unknown
+): CircleWalletTokenBalance | null {
+  const record = isRecord(payload) ? payload : null;
+
+  if (!record || typeof record.amount !== "string" || !record.amount) {
+    return null;
+  }
+
+  const token = isRecord(record.token) ? record.token : null;
+
+  return {
+    amount: record.amount,
+    raw: record,
+    symbol:
+      typeof token?.symbol === "string" && token.symbol ? token.symbol : null,
+    tokenAddress:
+      typeof token?.tokenAddress === "string" && token.tokenAddress
+        ? token.tokenAddress
+        : null,
+    updatedAt:
+      typeof record.updateDate === "string" && record.updateDate
+        ? record.updateDate
+        : typeof record.updatedAt === "string" && record.updatedAt
+          ? record.updatedAt
+          : null,
+  };
 }
 
 function readStoredJson<T>(key: string) {
@@ -1052,6 +1111,57 @@ export function CircleWalletProvider({
     [postW3sAction, session?.userToken]
   );
 
+  const createTypedDataChallenge = useCallback(
+    async (payload: Record<string, unknown>) => {
+      if (!session?.userToken) {
+        throw new Error("Circle session is not available.");
+      }
+
+      const response = await postW3sAction("createTypedDataChallenge", {
+        userToken: session.userToken,
+        payload,
+      });
+
+      if (!isRecord(response)) {
+        throw new Error("Circle did not return a valid sign challenge response.");
+      }
+
+      const challengeId = extractChallengeId(response);
+
+      if (!challengeId) {
+        throw new Error("Circle did not return a sign challenge identifier.");
+      }
+
+      return {
+        challengeId,
+        raw: response,
+      };
+    },
+    [postW3sAction, session?.userToken]
+  );
+
+  const getWalletBalances = useCallback(
+    async (walletId: string) => {
+      if (!session?.userToken) {
+        throw new Error("Circle session is not available.");
+      }
+
+      const response = await postW3sAction("getWalletBalances", {
+        userToken: session.userToken,
+        walletId,
+      });
+
+      if (!isRecord(response) || !Array.isArray(response.tokenBalances)) {
+        return [];
+      }
+
+      return response.tokenBalances
+        .map((balance) => normalizeCircleWalletTokenBalance(balance))
+        .filter((balance): balance is CircleWalletTokenBalance => balance !== null);
+    },
+    [postW3sAction, session?.userToken]
+  );
+
   useEffect(() => {
     const storedSession = readStoredJson<CircleSession>(SESSION_STORAGE_KEY);
     const storedLoginConfig = readStoredJson<StoredLoginConfig>(
@@ -1123,9 +1233,11 @@ export function CircleWalletProvider({
             return;
           }
 
-          if (error || !result) {
+          if (error || !isW3SLoginCompleteResult(result)) {
             setIsAuthenticating(false);
-            handleAuthFailureRef.current?.(error);
+            handleAuthFailureRef.current?.(
+              error ?? new Error("Circle login did not return a valid auth payload.")
+            );
             return;
           }
 
@@ -1463,7 +1575,9 @@ export function CircleWalletProvider({
       authenticated: Boolean(session),
       closeLogin: () => setIsLoginOpen(false),
       createContractExecutionChallenge,
+      createTypedDataChallenge,
       executeChallenge,
+      getWalletBalances,
       hasPendingEmailOtp,
       isAuthenticating,
       login: () => setIsLoginOpen(true),
@@ -1491,7 +1605,9 @@ export function CircleWalletProvider({
       authError,
       authStatus,
       createContractExecutionChallenge,
+      createTypedDataChallenge,
       executeChallenge,
+      getWalletBalances,
       hasPendingEmailOtp,
       isAuthenticating,
       loadWallets,
@@ -1553,14 +1669,16 @@ function CircleWalletLoginDialog({
 }) {
   const [email, setEmail] = useState("");
 
-  useEffect(() => {
-    if (!isOpen) {
-      setEmail("");
-    }
-  }, [isOpen]);
-
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) {
+          setEmail("");
+          onClose();
+        }
+      }}
+    >
       <DialogContent className="border-border/40 bg-background/95 sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-xl">

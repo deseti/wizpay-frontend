@@ -16,6 +16,7 @@ import {
 } from "@/constants/addresses";
 import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import { activeFxEngineAddress } from "@/lib/fx-config";
+import { arcTestnet } from "@/lib/wagmi";
 import { sameAddress } from "@/lib/wizpay";
 import type { HistoryItem, UnifiedHistoryItem } from "@/lib/types";
 
@@ -62,7 +63,7 @@ export function useWizPayHistory({
   refetchCb: () => void;
 }) {
   const queryClient = useQueryClient();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { walletAddress } = useActiveWalletAddress();
 
   /* ── history ── */

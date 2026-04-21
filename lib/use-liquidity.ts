@@ -1,8 +1,8 @@
-import { encodeFunctionData, type Address, type Hex } from "viem";
+import { type Address, type Hex } from "viem";
 import { usePublicClient, useReadContract } from "wagmi";
 
-import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
 import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
+import { useTransactionExecutor } from "@/hooks/useTransactionExecutor";
 import {
   LIQUIDITY_ADDED_EVENT,
   LIQUIDITY_REMOVED_EVENT,
@@ -10,52 +10,10 @@ import {
 import { STABLE_FX_ADAPTER_V2_ADDRESS } from "@/constants/addresses";
 import { STABLE_FX_ADAPTER_V2_ABI } from "@/constants/stablefx-abi";
 import { ERC20_ABI } from "@/constants/erc20";
+import { arcTestnet } from "@/lib/wagmi";
 
-const CIRCLE_FEE_LEVEL = "MEDIUM";
 const POLL_INTERVAL_MS = 1500;
 const MAX_CONFIRMATION_POLLS = 20;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function getNestedString(source: unknown, path: string[]) {
-  let current: unknown = source;
-
-  for (const key of path) {
-    if (!isRecord(current) || typeof current[key] === "undefined") {
-      return null;
-    }
-
-    current = current[key];
-  }
-
-  return typeof current === "string" && current ? current : null;
-}
-
-function extractCircleTxHash(value: unknown): Hex | null {
-  const candidate =
-    getNestedString(value, ["data", "txHash"]) ??
-    getNestedString(value, ["data", "transactionHash"]) ??
-    getNestedString(value, ["txHash"]) ??
-    getNestedString(value, ["transactionHash"]);
-
-  return /^0x[a-fA-F0-9]{64}$/.test(candidate ?? "")
-    ? (candidate as Hex)
-    : null;
-}
-
-function extractCircleReference(value: unknown): string | null {
-  return (
-    getNestedString(value, ["data", "id"]) ??
-    getNestedString(value, ["data", "transactionId"]) ??
-    getNestedString(value, ["id"]) ??
-    getNestedString(value, ["transactionId"]) ??
-    getNestedString(value, ["challengeId"]) ??
-    getNestedString(value, ["challenge", "id"]) ??
-    null
-  );
-}
 
 function waitFor(ms: number) {
   return new Promise<void>((resolve) => {
@@ -82,15 +40,15 @@ type LiquidityRemovedLog = {
 };
 
 export function useLiquidity(tokenAddress: Address) {
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { walletAddress } = useActiveWalletAddress();
-  const { arcWallet, createContractExecutionChallenge, executeChallenge } =
-    useCircleWallet();
+  const { executeTransaction } = useTransactionExecutor();
 
   // Liquidity Vault total supply
   const { data: totalSupply, refetch: refetchTotalSupply } = useReadContract({
     address: STABLE_FX_ADAPTER_V2_ADDRESS,
     abi: STABLE_FX_ADAPTER_V2_ABI,
+    chainId: arcTestnet.id,
     functionName: "totalSupply",
   });
 
@@ -98,6 +56,7 @@ export function useLiquidity(tokenAddress: Address) {
   const { data: lpBalance, refetch: refetchLpBalance } = useReadContract({
     address: STABLE_FX_ADAPTER_V2_ADDRESS,
     abi: STABLE_FX_ADAPTER_V2_ABI,
+    chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
     query: { enabled: !!walletAddress },
@@ -107,6 +66,7 @@ export function useLiquidity(tokenAddress: Address) {
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: tokenAddress,
     abi: ERC20_ABI,
+    chainId: arcTestnet.id,
     functionName: "allowance",
     args: walletAddress
       ? [walletAddress, STABLE_FX_ADAPTER_V2_ADDRESS]
@@ -120,6 +80,7 @@ export function useLiquidity(tokenAddress: Address) {
   const { data: lpAllowance, refetch: refetchLpAllowance } = useReadContract({
     address: STABLE_FX_ADAPTER_V2_ADDRESS,
     abi: STABLE_FX_ADAPTER_V2_ABI,
+    chainId: arcTestnet.id,
     functionName: "allowance",
     args: walletAddress
       ? [walletAddress, STABLE_FX_ADAPTER_V2_ADDRESS]
@@ -131,6 +92,7 @@ export function useLiquidity(tokenAddress: Address) {
   const { data: tokenBalance, refetch: refetchTokenBalance } = useReadContract({
     address: tokenAddress,
     abi: ERC20_ABI,
+    chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
     query: { enabled: !!walletAddress },
@@ -196,7 +158,7 @@ export function useLiquidity(tokenAddress: Address) {
     return null;
   };
 
-  const executeCircleWrite = async ({
+  const executeManagedWrite = async ({
     abi,
     args,
     contractAddress,
@@ -212,50 +174,30 @@ export function useLiquidity(tokenAddress: Address) {
     refId: string;
   }) => {
     if (!walletAddress) {
-      throw new Error("Sign in with your Circle Arc wallet before managing liquidity.");
+      throw new Error("Connect the active wallet before managing liquidity.");
     }
 
-    if (!arcWallet?.id) {
-      throw new Error(
-        "Circle Arc wallet metadata is missing. Refresh the session and try again."
-      );
-    }
-
-    const callData = (encodeFunctionData as any)({
+    const executionResult = await executeTransaction({
       abi,
-      functionName,
       args,
-    });
-    const startBlock = publicClient ? await publicClient.getBlockNumber() : 0n;
-
-    const challenge = await createContractExecutionChallenge({
-      walletId: arcWallet.id,
+      chainId: arcTestnet.id,
       contractAddress,
-      callData,
-      feeLevel: CIRCLE_FEE_LEVEL,
+      functionName,
       refId,
     });
 
-    const challengeResult = await executeChallenge(challenge.challengeId);
-    const txHash =
-      extractCircleTxHash(challengeResult) ?? extractCircleTxHash(challenge.raw);
-
-    if (txHash && publicClient) {
+    if (executionResult.txHash && publicClient) {
       await publicClient.waitForTransactionReceipt({
-        hash: txHash,
+        hash: executionResult.txHash,
         confirmations: 1,
       });
     }
 
     const recoveredTxHash =
-      txHash ?? (recoverTxHash ? await recoverTxHash(startBlock) : null);
+      executionResult.txHash ??
+      (recoverTxHash ? await recoverTxHash(executionResult.startBlock) : null);
 
-    return (
-      recoveredTxHash ??
-      extractCircleReference(challengeResult) ??
-      extractCircleReference(challenge.raw) ??
-      challenge.challengeId
-    );
+    return recoveredTxHash ?? executionResult.referenceId;
   };
 
   const waitForAllowanceUpdate = async (targetAmount: bigint) => {
@@ -278,7 +220,7 @@ export function useLiquidity(tokenAddress: Address) {
   };
 
   const approveToken = async (amount: bigint) => {
-    const txRef = await executeCircleWrite({
+    const txRef = await executeManagedWrite({
       abi: ERC20_ABI,
       args: [STABLE_FX_ADAPTER_V2_ADDRESS, amount],
       contractAddress: tokenAddress,
@@ -292,7 +234,7 @@ export function useLiquidity(tokenAddress: Address) {
 
   // Approve SFX-LP to adapter (for withdraw)
   const approveLpToken = async (amount: bigint) => {
-    return await executeCircleWrite({
+    return await executeManagedWrite({
       abi: STABLE_FX_ADAPTER_V2_ABI,
       args: [STABLE_FX_ADAPTER_V2_ADDRESS, amount],
       contractAddress: STABLE_FX_ADAPTER_V2_ADDRESS,
@@ -302,7 +244,7 @@ export function useLiquidity(tokenAddress: Address) {
   };
 
   const addLiquidity = async (amount: bigint) => {
-    return await executeCircleWrite({
+    return await executeManagedWrite({
       abi: STABLE_FX_ADAPTER_V2_ABI,
       args: [tokenAddress, amount],
       contractAddress: STABLE_FX_ADAPTER_V2_ADDRESS,
@@ -318,7 +260,7 @@ export function useLiquidity(tokenAddress: Address) {
   };
 
   const removeLiquidity = async (shares: bigint) => {
-    return await executeCircleWrite({
+    return await executeManagedWrite({
       abi: STABLE_FX_ADAPTER_V2_ABI,
       args: [tokenAddress, shares],
       contractAddress: STABLE_FX_ADAPTER_V2_ADDRESS,

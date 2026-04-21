@@ -21,6 +21,7 @@ import {
 import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import { useTokenBalances } from "@/hooks/useTokenBalances";
 import { useEmployeePayments } from "@/hooks/useEmployeePayments";
+import { arcTestnet } from "@/lib/wagmi";
 
 interface PayrollEventLog {
   transactionHash: string | null;
@@ -42,7 +43,7 @@ interface PayrollEventLog {
  * into a unified state object for the dashboard page and components.
  */
 export function usePayrollData() {
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { walletAddress } = useActiveWalletAddress();
 
   // Token balances

@@ -1,26 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { encodeFunctionData, type Hex } from "viem";
+import { type Address, type Hex } from "viem";
 import {
   ArrowRightLeft,
   CheckCircle2,
   ExternalLink,
-  RefreshCw,
   ShieldCheck,
-  Wallet,
 } from "lucide-react";
 import { usePublicClient, useReadContract } from "wagmi";
 
 import { useActionGuard } from "@/hooks/useActionGuard";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { useTransactionExecutor } from "@/hooks/useTransactionExecutor";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -36,7 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
 import { WIZPAY_ABI, WIZPAY_BATCH_PAYMENT_ROUTED_EVENT } from "@/constants/abi";
 import { WIZPAY_ADDRESS } from "@/constants/addresses";
 import { ERC20_ABI } from "@/constants/erc20";
@@ -44,7 +36,6 @@ import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
 import { useToast } from "@/hooks/use-toast";
 import {
   EXPLORER_BASE_URL,
-  GAS_BUFFER_BPS,
   PREVIEW_SLIPPAGE_BPS,
   SUPPORTED_TOKENS,
   formatTokenAmount,
@@ -54,7 +45,6 @@ import {
 } from "@/lib/wizpay";
 import { arcTestnet } from "@/lib/wagmi";
 
-const CIRCLE_FEE_LEVEL = "MEDIUM";
 const MAX_CONFIRMATION_POLLS = 20;
 const POLL_INTERVAL_MS = 1500;
 
@@ -74,14 +64,6 @@ interface SwapSuccessState {
   txHash: string;
 }
 
-function shortenAddress(address: string | undefined) {
-  if (!address) {
-    return "Not connected";
-  }
-
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
-
 function shortenHash(hash: string | undefined) {
   if (!hash) {
     return "Pending";
@@ -94,50 +76,6 @@ function isExplorerHash(value: string | null | undefined): value is Hex {
   return /^0x[a-fA-F0-9]{64}$/.test(value ?? "");
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function getNestedString(source: unknown, path: string[]) {
-  let current: unknown = source;
-
-  for (const key of path) {
-    const record = asRecord(current);
-
-    if (!record || typeof record[key] === "undefined") {
-      return null;
-    }
-
-    current = record[key];
-  }
-
-  return typeof current === "string" && current ? current : null;
-}
-
-function extractCircleTxHash(value: unknown): Hex | null {
-  const candidate =
-    getNestedString(value, ["data", "txHash"]) ??
-    getNestedString(value, ["data", "transactionHash"]) ??
-    getNestedString(value, ["txHash"]) ??
-    getNestedString(value, ["transactionHash"]);
-
-  return isExplorerHash(candidate) ? candidate : null;
-}
-
-function extractCircleReference(value: unknown): string | null {
-  return (
-    getNestedString(value, ["data", "id"]) ??
-    getNestedString(value, ["data", "transactionId"]) ??
-    getNestedString(value, ["id"]) ??
-    getNestedString(value, ["transactionId"]) ??
-    getNestedString(value, ["challengeId"]) ??
-    getNestedString(value, ["challenge", "id"]) ??
-    null
-  );
-}
-
 function waitFor(ms: number) {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
@@ -146,17 +84,13 @@ function waitFor(ms: number) {
 
 export function SwapScreen() {
   const { walletAddress } = useActiveWalletAddress();
-  const { arcWallet, createContractExecutionChallenge, executeChallenge } =
-    useCircleWallet();
+  const { executeTransaction } = useTransactionExecutor();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { toast } = useToast();
 
   const [tokenIn, setTokenIn] = useState<TokenSymbol>("USDC");
   const [tokenOut, setTokenOut] = useState<TokenSymbol>("EURC");
   const [amountIn, setAmountIn] = useState("");
-  const [estimatedGas, setEstimatedGas] = useState<bigint | null>(null);
-  const [approvalHash, setApprovalHash] = useState<string | null>(null);
-  const [swapHash, setSwapHash] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isApproving, setIsApproving] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
@@ -174,6 +108,7 @@ export function SwapScreen() {
     useReadContract({
       address: tokenInConfig.address,
       abi: ERC20_ABI,
+      chainId: arcTestnet.id,
       functionName: "allowance",
       args: walletAddress ? [walletAddress, WIZPAY_ADDRESS] : undefined,
       query: { enabled: Boolean(walletAddress) },
@@ -182,6 +117,7 @@ export function SwapScreen() {
   const { data: currentBalanceData, refetch: refetchBalance } = useReadContract({
     address: tokenInConfig.address,
     abi: ERC20_ABI,
+    chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
     query: { enabled: Boolean(walletAddress) },
@@ -190,6 +126,7 @@ export function SwapScreen() {
   const { data: estimatedOutputData, refetch: refetchQuote } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
+    chainId: arcTestnet.id,
     functionName: "getEstimatedOutput",
     args:
       walletAddress && amountInUnits > 0n && tokenIn !== tokenOut
@@ -204,6 +141,7 @@ export function SwapScreen() {
   const { data: feeBpsData } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
+    chainId: arcTestnet.id,
     functionName: "feeBps",
   });
 
@@ -226,15 +164,11 @@ export function SwapScreen() {
   const insufficientBalance = amountInUnits > currentBalance;
   const canSubmit =
     Boolean(walletAddress) &&
-    Boolean(arcWallet?.id) &&
     tokenIn !== tokenOut &&
     amountInUnits > 0n &&
     !insufficientBalance;
 
   useEffect(() => {
-    setEstimatedGas(null);
-    setApprovalHash(null);
-    setSwapHash(null);
     setErrorMessage(null);
     setSuccessState(null);
   }, [amountIn, tokenIn, tokenOut]);
@@ -335,7 +269,7 @@ export function SwapScreen() {
 
   async function handleApprove() {
     if (!canSubmit) {
-      setErrorMessage("Connect your Circle Arc wallet and enter a valid swap amount first.");
+      setErrorMessage("Connect the active wallet and enter a valid swap amount first.");
       return;
     }
 
@@ -344,39 +278,20 @@ export function SwapScreen() {
       return;
     }
 
-    if (!walletAddress || !arcWallet?.id) {
-      setErrorMessage("Circle Arc wallet metadata is missing. Refresh and try again.");
-      return;
-    }
-
     setIsApproving(true);
     setErrorMessage(null);
 
     try {
-      const callData = encodeFunctionData({
+      const approvalResult = await executeTransaction({
         abi: ERC20_ABI,
-        functionName: "approve",
         args: [WIZPAY_ADDRESS, amountInUnits],
-      });
-
-      const challenge = await createContractExecutionChallenge({
-        walletId: arcWallet.id,
+        chainId: arcTestnet.id,
         contractAddress: tokenInConfig.address,
-        callData,
-        feeLevel: CIRCLE_FEE_LEVEL,
+        functionName: "approve",
         refId: `SWAP-APPROVE-${Date.now()}`,
       });
 
-      const challengeResult = await executeChallenge(challenge.challengeId);
-      const txHash =
-        extractCircleTxHash(challengeResult) ??
-        extractCircleTxHash(challenge.raw);
-
-      if (txHash) {
-        setApprovalHash(txHash);
-      }
-
-      await waitForAllowanceUpdate(txHash);
+      await waitForAllowanceUpdate(approvalResult.txHash);
 
       toast({
         title: "Swap approval confirmed",
@@ -399,7 +314,7 @@ export function SwapScreen() {
 
   async function handleSwap() {
     if (!canSubmit) {
-      setErrorMessage("Connect your Circle Arc wallet and enter a valid swap amount first.");
+      setErrorMessage("Connect the active wallet and enter a valid swap amount first.");
       return;
     }
 
@@ -413,8 +328,8 @@ export function SwapScreen() {
       return;
     }
 
-    if (!walletAddress || !arcWallet?.id) {
-      setErrorMessage("Circle Arc wallet metadata is missing. Refresh and try again.");
+    if (!walletAddress) {
+      setErrorMessage("Connect the active wallet and enter a valid swap amount first.");
       return;
     }
 
@@ -424,11 +339,11 @@ export function SwapScreen() {
     try {
       const referenceId = `SWAP-${Date.now()}`;
       const tokenOuts = [tokenOutConfig.address];
-      const recipients = [walletAddress];
+      const recipients: readonly Address[] = [walletAddress];
       const amountsIn = [amountInUnits];
       const minAmountsOut = [minimumOut];
 
-      const gasEstimate = await publicClient.estimateContractGas({
+      await publicClient.estimateContractGas({
         address: WIZPAY_ADDRESS,
         abi: WIZPAY_ABI,
         functionName: "batchRouteAndPay",
@@ -443,12 +358,8 @@ export function SwapScreen() {
         ],
       });
 
-      const bufferedGas = (gasEstimate * (10000n + GAS_BUFFER_BPS)) / 10000n;
-      setEstimatedGas(bufferedGas);
-
-      const callData = encodeFunctionData({
+      const executionResult = await executeTransaction({
         abi: WIZPAY_ABI,
-        functionName: "batchRouteAndPay",
         args: [
           tokenInConfig.address,
           tokenOuts,
@@ -457,34 +368,19 @@ export function SwapScreen() {
           minAmountsOut,
           referenceId,
         ],
-      });
-      const startBlock = await publicClient.getBlockNumber();
-
-      const challenge = await createContractExecutionChallenge({
-        walletId: arcWallet.id,
+        chainId: arcTestnet.id,
         contractAddress: WIZPAY_ADDRESS,
-        callData,
-        feeLevel: CIRCLE_FEE_LEVEL,
+        functionName: "batchRouteAndPay",
         refId: referenceId,
       });
 
-      const challengeResult = await executeChallenge(challenge.challengeId);
-      const txHash =
-        extractCircleTxHash(challengeResult) ??
-        extractCircleTxHash(challenge.raw);
-      const fallbackReference =
-        extractCircleReference(challengeResult) ??
-        extractCircleReference(challenge.raw) ??
-        challenge.challengeId;
-
       const confirmedHash = await waitForSwapSettlement({
-        startBlock,
-        txHash,
+        startBlock: executionResult.startBlock,
+        txHash: executionResult.txHash,
         referenceId,
       });
-      const finalHash = confirmedHash ?? txHash ?? fallbackReference;
+      const finalHash = confirmedHash ?? executionResult.hash;
 
-      setSwapHash(finalHash);
       setSuccessState({
         amountIn,
         amountOut:

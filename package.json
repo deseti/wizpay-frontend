@@ -20,6 +20,8 @@
     "@circle-fin/swap-kit": "^1.1.0",
     "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
     "@radix-ui/react-toast": "^1.2.15",
+    "@rainbow-me/rainbowkit": "^2.2.10",
+    "@reown/appkit": "^1.7.8",
     "@tanstack/react-query": "^5.96.2",
     "@upstash/redis": "^1.37.0",
     "autoprefixer": "^10.5.0",

@@ -28,16 +28,23 @@ export function useAdaptivePolling({
   stopped = false,
   enabled = true,
 }: UseAdaptivePollingOptions) {
-  const lastActivityRef = useRef(Date.now());
+  const lastActivityRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onPollRef = useRef(onPoll);
-  onPollRef.current = onPoll;
+
+  useEffect(() => {
+    onPollRef.current = onPoll;
+  }, [onPoll]);
 
   const recordActivity = useCallback(() => {
     lastActivityRef.current = Date.now();
   }, []);
 
   useEffect(() => {
+    if (lastActivityRef.current === 0) {
+      lastActivityRef.current = Date.now();
+    }
+
     if (!enabled || stopped) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);

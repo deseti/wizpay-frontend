@@ -1,15 +1,10 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { encodeFunctionData, type Address, type Hex } from "viem";
-import {
-  usePublicClient,
-  useReadContract,
-  useReadContracts,
-  useWalletClient,
-} from "wagmi";
+import { type Address, type Hex } from "viem";
+import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 
 import { useToast } from "@/hooks/use-toast";
-import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
 import { useActiveWalletAddress } from "@/hooks/useActiveWalletAddress";
+import { useTransactionExecutor } from "@/hooks/useTransactionExecutor";
 
 import { WIZPAY_ABI, WIZPAY_BATCH_PAYMENT_ROUTED_EVENT } from "@/constants/abi";
 import { WIZPAY_ADDRESS } from "@/constants/addresses";
@@ -42,57 +37,8 @@ type BatchSettlementLog = {
   };
 };
 
-const CIRCLE_FEE_LEVEL = "MEDIUM";
 const POLL_INTERVAL_MS = 1500;
 const MAX_CONFIRMATION_POLLS = 20;
-
-function isExplorerHash(value: string | null | undefined): value is Hex {
-  return /^0x[a-fA-F0-9]{64}$/.test(value ?? "");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function getNestedString(source: unknown, path: string[]): string | null {
-  let current: unknown = source;
-
-  for (const key of path) {
-    const record = asRecord(current);
-
-    if (!record || typeof record[key] === "undefined") {
-      return null;
-    }
-
-    current = record[key];
-  }
-
-  return typeof current === "string" && current ? current : null;
-}
-
-function extractCircleTxHash(value: unknown): Hex | null {
-  const candidate =
-    getNestedString(value, ["data", "txHash"]) ??
-    getNestedString(value, ["data", "transactionHash"]) ??
-    getNestedString(value, ["txHash"]) ??
-    getNestedString(value, ["transactionHash"]);
-
-  return isExplorerHash(candidate) ? candidate : null;
-}
-
-function extractCircleReference(value: unknown): string | null {
-  return (
-    getNestedString(value, ["data", "id"]) ??
-    getNestedString(value, ["data", "transactionId"]) ??
-    getNestedString(value, ["id"]) ??
-    getNestedString(value, ["transactionId"]) ??
-    getNestedString(value, ["challengeId"]) ??
-    getNestedString(value, ["challenge", "id"]) ??
-    null
-  );
-}
 
 function waitFor(ms: number) {
   return new Promise<void>((resolve) => {
@@ -128,10 +74,8 @@ export function useWizPayContract({
   validRecipientCount: number;
 }) {
   const { walletAddress } = useActiveWalletAddress();
-  const { arcWallet, createContractExecutionChallenge, executeChallenge } =
-    useCircleWallet();
-  const publicClient = usePublicClient();
-  const { data: walletClient } = useWalletClient({ chainId: arcTestnet.id });
+  const { executeTransaction, signTypedData } = useTransactionExecutor();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { toast } = useToast();
 
   const activeToken = SUPPORTED_TOKENS[state.selectedToken];
@@ -141,6 +85,7 @@ export function useWizPayContract({
   const { data: currentAllowanceData, refetch: refetchAllowance } = useReadContract({
     address: activeToken.address,
     abi: ERC20_ABI,
+    chainId: arcTestnet.id,
     functionName: "allowance",
     args: walletAddress ? [walletAddress, allowanceSpender] : undefined,
     query: { enabled: !!walletAddress },
@@ -149,6 +94,7 @@ export function useWizPayContract({
   const { data: currentBalanceData, refetch: refetchBalance } = useReadContract({
     address: activeToken.address,
     abi: ERC20_ABI,
+    chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
     query: { enabled: !!walletAddress },
@@ -157,6 +103,7 @@ export function useWizPayContract({
   const { data: feeBpsData } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
+    chainId: arcTestnet.id,
     functionName: "feeBps",
   });
 
@@ -167,6 +114,7 @@ export function useWizPayContract({
   const { data: fxEngineData } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
+    chainId: arcTestnet.id,
     functionName: "fxEngine",
   });
 
@@ -174,6 +122,7 @@ export function useWizPayContract({
   const { data: rawQuoteData } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
+    chainId: arcTestnet.id,
     functionName: "getBatchEstimatedOutputs",
     args: [
       activeToken.address,
@@ -204,12 +153,14 @@ export function useWizPayContract({
       {
         address: USDC_A,
         abi: ERC20_ABI,
+        chainId: arcTestnet.id,
         functionName: "balanceOf",
         args: engineAddressForBalances ? [engineAddressForBalances] : undefined,
       },
       {
         address: EURC_A,
         abi: ERC20_ABI,
+        chainId: arcTestnet.id,
         functionName: "balanceOf",
         args: engineAddressForBalances ? [engineAddressForBalances] : undefined,
       },
@@ -545,16 +496,7 @@ export function useWizPayContract({
     if (!walletAddress) {
       state.setApprovalState("idle");
       state.setErrorMessage(
-        "Sign in with your Circle Arc wallet before requesting approval."
-      );
-      state.setStatusMessage(null);
-      return { ok: false, hash: null };
-    }
-
-    if (!arcWallet?.id) {
-      state.setApprovalState("idle");
-      state.setErrorMessage(
-        "Circle Arc wallet metadata is missing. Refresh the session and try again."
+        "Connect the active wallet before requesting approval."
       );
       state.setStatusMessage(null);
       return { ok: false, hash: null };
@@ -563,44 +505,30 @@ export function useWizPayContract({
     const referenceBase = state.referenceId.trim() || "WIZPAY";
 
     try {
-      const callData = encodeFunctionData({
+      state.setStatusMessage("Submitting approval transaction...");
+
+      const approvalResult = await executeTransaction({
         abi: ERC20_ABI,
-        functionName: "approve",
         args: [allowanceSpender, approvalTarget],
-      });
-
-      state.setStatusMessage("Creating Circle approval challenge...");
-
-      const challenge = await createContractExecutionChallenge({
-        walletId: arcWallet.id,
+        chainId: arcTestnet.id,
         contractAddress: activeToken.address,
-        callData,
-        feeLevel: CIRCLE_FEE_LEVEL,
+        functionName: "approve",
         refId: `${referenceBase}-approve`,
       });
 
-      state.setStatusMessage(
-        "Confirm the approval in the Circle wallet window..."
-      );
-
-      const challengeResult = await executeChallenge(challenge.challengeId);
-      const txHash =
-        extractCircleTxHash(challengeResult) ??
-        extractCircleTxHash(challenge.raw);
-
-      if (txHash) {
-        state.setApproveTxHash(txHash);
+      if (approvalResult.txHash) {
+        state.setApproveTxHash(approvalResult.txHash);
       }
 
       state.setApprovalState("confirming");
       state.setStatusMessage(
-        txHash
+        approvalResult.txHash
           ? "Waiting for approval confirmation on Arc..."
           : "Waiting for approval allowance to update..."
       );
 
       await waitForAllowanceUpdate({
-        txHash,
+        txHash: approvalResult.txHash,
         targetAmount: approvalTarget,
       });
 
@@ -613,7 +541,7 @@ export function useWizPayContract({
 
       return {
         ok: true,
-        hash: txHash ?? null,
+        hash: approvalResult.hash,
       };
     } catch (e: unknown) {
       state.setApprovalState("idle");
@@ -644,34 +572,14 @@ export function useWizPayContract({
 
       if (!walletAddress) {
         state.setErrorMessage(
-          "Connect your Circle Arc wallet before settling through Circle."
-        );
-        return { ok: false, hash: null };
-      }
-
-      if (!arcWallet?.id) {
-        state.setErrorMessage(
-          "Circle Arc wallet metadata is missing. Refresh the session and try again."
-        );
-        return { ok: false, hash: null };
-      }
-
-      const hasCrossCurrencyRoute = state.preparedRecipients.some((recipient) => {
-        const targetToken = SUPPORTED_TOKENS[recipient.targetToken];
-
-        return !sameAddress(activeToken.address, targetToken.address);
-      });
-
-      if (hasCrossCurrencyRoute && !walletClient) {
-        state.setErrorMessage(
-          "StableFX signature is not ready on Arc. Reconnect the wallet session and try again."
+          "Connect the active wallet before settling through StableFX."
         );
         return { ok: false, hash: null };
       }
 
       state.setSubmitState("simulating");
       state.setErrorMessage(null);
-      state.setStatusMessage("Preparing Circle StableFX settlements...");
+      state.setStatusMessage("Preparing StableFX settlements...");
       setEstimatedGas(null);
 
       try {
@@ -689,50 +597,36 @@ export function useWizPayContract({
           if (sameAddress(activeToken.address, targetToken.address)) {
             state.setSubmitState("wallet");
             state.setStatusMessage(
-              `Confirm Circle transfer ${index + 1} of ${state.preparedRecipients.length}...`
+              `Confirm transfer ${index + 1} of ${state.preparedRecipients.length}...`
             );
 
-            const callData = encodeFunctionData({
+            const transferResult = await executeTransaction({
               abi: ERC20_ABI,
-              functionName: "transfer",
               args: [recipient.address as Address, recipient.amountUnits],
-            });
-
-            const challenge = await createContractExecutionChallenge({
-              walletId: arcWallet.id,
+              chainId: arcTestnet.id,
               contractAddress: activeToken.address,
-              callData,
-              feeLevel: CIRCLE_FEE_LEVEL,
+              functionName: "transfer",
               refId: `${state.referenceId.trim()}-${index + 1}-direct`,
             });
 
-            const challengeResult = await executeChallenge(challenge.challengeId);
-            const txHash =
-              extractCircleTxHash(challengeResult) ??
-              extractCircleTxHash(challenge.raw);
-            const fallbackReference =
-              extractCircleReference(challengeResult) ??
-              extractCircleReference(challenge.raw) ??
-              challenge.challengeId;
-
             state.setSubmitState("confirming");
-            state.setSubmitTxHash(txHash ?? fallbackReference);
+            state.setSubmitTxHash(transferResult.hash);
             state.setStatusMessage(
-              txHash
-                ? `Waiting for Circle transfer ${index + 1} of ${state.preparedRecipients.length}...`
-                : `Finalizing Circle transfer ${index + 1} of ${state.preparedRecipients.length}...`
+              transferResult.txHash
+                ? `Waiting for transfer ${index + 1} of ${state.preparedRecipients.length}...`
+                : `Finalizing transfer ${index + 1} of ${state.preparedRecipients.length}...`
             );
 
-            if (txHash) {
+            if (transferResult.txHash) {
               await publicClient.waitForTransactionReceipt({
-                hash: txHash,
+                hash: transferResult.txHash,
                 confirmations: 1,
               });
             }
 
             totalDistributed[recipient.targetToken] += recipient.amountUnits;
             settledRecipients += 1;
-            finalHash = txHash ?? fallbackReference;
+            finalHash = transferResult.hash;
             continue;
           }
 
@@ -755,17 +649,18 @@ export function useWizPayContract({
 
           state.setSubmitState("wallet");
           state.setStatusMessage(
-            `Sign Circle permit ${index + 1} of ${state.preparedRecipients.length} in your wallet...`
+            `Sign permit ${index + 1} of ${state.preparedRecipients.length} in your wallet...`
           );
 
-          const signature = (await walletClient!.request({
-            method: "eth_signTypedData_v4",
-            params: [walletAddress!, JSON.stringify(quote.typedData)],
-          })) as string;
+          const signature = await signTypedData({
+            chainId: arcTestnet.id,
+            memo: `${state.referenceId.trim()}-${index + 1}`,
+            typedData: quote.typedData as unknown as Record<string, unknown>,
+          });
 
           state.setSubmitState("confirming");
           state.setStatusMessage(
-            `Submitting Circle trade ${index + 1} of ${state.preparedRecipients.length}...`
+            `Submitting trade ${index + 1} of ${state.preparedRecipients.length}...`
           );
 
           const initialTrade = await executeFxTrade({
@@ -847,14 +742,7 @@ export function useWizPayContract({
 
     if (!walletAddress) {
       state.setErrorMessage(
-        "Sign in with your Circle Arc wallet before submitting payroll."
-      );
-      return { ok: false, hash: null };
-    }
-
-    if (!arcWallet?.id) {
-      state.setErrorMessage(
-        "Circle Arc wallet metadata is missing. Refresh the session and try again."
+          "Connect the active wallet before submitting payroll."
       );
       return { ok: false, hash: null };
     }
@@ -902,10 +790,11 @@ export function useWizPayContract({
       setEstimatedGas(bufferedGas);
 
       const referenceId = state.referenceId.trim();
-      const startBlock = await publicClient.getBlockNumber();
-      const callData = encodeFunctionData({
+      state.setSubmitState("wallet");
+      state.setStatusMessage("Confirm the batch transaction in your wallet...");
+
+      const executionResult = await executeTransaction({
         abi: WIZPAY_ABI,
-        functionName: "batchRouteAndPay",
         args: [
           activeToken.address,
           tokenOutsArray,
@@ -914,46 +803,28 @@ export function useWizPayContract({
           minAmountsOutArray,
           referenceId,
         ],
-      });
-
-      state.setSubmitState("wallet");
-      state.setStatusMessage(
-        "Confirm the batch transaction in the Circle wallet window..."
-      );
-
-      const challenge = await createContractExecutionChallenge({
-        walletId: arcWallet.id,
+        chainId: arcTestnet.id,
         contractAddress: WIZPAY_ADDRESS,
-        callData,
-        feeLevel: CIRCLE_FEE_LEVEL,
+        functionName: "batchRouteAndPay",
         refId: referenceId,
       });
 
-      const challengeResult = await executeChallenge(challenge.challengeId);
-      const txHash =
-        extractCircleTxHash(challengeResult) ??
-        extractCircleTxHash(challenge.raw);
-      const fallbackReference =
-        extractCircleReference(challengeResult) ??
-        extractCircleReference(challenge.raw) ??
-        challenge.challengeId;
-
       state.setSubmitState("confirming");
-      state.setSubmitTxHash(txHash ?? fallbackReference);
+      state.setSubmitTxHash(executionResult.hash);
       state.setStatusMessage(
-        txHash
+        executionResult.txHash
           ? "Waiting for Arc confirmation..."
           : "Waiting for the payroll event to confirm on Arc..."
       );
 
       const confirmedHash = await waitForBatchSettlement({
-        startBlock,
-        txHash,
+        startBlock: executionResult.startBlock,
+        txHash: executionResult.txHash,
       });
 
       state.setSubmitState("confirmed");
       state.setStatusMessage(null);
-      state.setSubmitTxHash(confirmedHash ?? txHash ?? fallbackReference);
+      state.setSubmitTxHash(confirmedHash ?? executionResult.hash);
 
       state.setSessionTotalAmount((prev) => prev + batchAmount);
       state.setSessionTotalRecipients((prev) => prev + validRecipientCount);
@@ -982,7 +853,7 @@ export function useWizPayContract({
 
       return {
         ok: true,
-        hash: confirmedHash ?? txHash ?? fallbackReference,
+        hash: confirmedHash ?? executionResult.hash,
       };
 
     } catch (err: unknown) {
