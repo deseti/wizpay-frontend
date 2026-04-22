@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { formatUnits, parseUnits } from "viem";
 import {
   CheckCircle2,
@@ -28,7 +28,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 
 import { useLiquidity } from "@/lib/use-liquidity";
 import {
-  EXPLORER_BASE_URL,
   TOKEN_OPTIONS,
   formatCompactAddress,
   formatTokenAmount,
@@ -76,18 +75,15 @@ export function LiquidityScreen() {
   const {
     lpBalance,
     allowance,
-    lpAllowance,
     tokenBalance,
+    isLpBalanceLoading,
+    isTokenBalanceLoading,
     approveToken,
     approveLpToken,
     addLiquidity,
     removeLiquidity,
     refetchAll,
   } = useLiquidity(tokenAddress);
-
-  useEffect(() => {
-    refetchAll();
-  }, [selectedToken, activeTab, refetchAll]);
 
   const decimals = tokenRecord?.decimals || 6;
   const amountBn = amountStr ? parseUnits(amountStr, activeTab === "deposit" ? decimals : 6) : 0n;
@@ -113,13 +109,13 @@ export function LiquidityScreen() {
         setStep("approving");
         const approveHash = await approveToken(amountBn);
         await waitForTx(approveHash);
-        refetchAll();
+        await refetchAll();
       }
       setStep("executing");
       const hash = await addLiquidity(amountBn);
       setTxHash(hash);
       await waitForTx(hash);
-      refetchAll();
+      await refetchAll();
       setStep("success");
     } catch (error) {
       console.error("Deposit failed:", error);
@@ -134,13 +130,13 @@ export function LiquidityScreen() {
         setStep("approving");
         const approveHash = await approveLpToken(amountBn);
         await waitForTx(approveHash);
-        refetchAll();
+        await refetchAll();
       }
       setStep("executing");
       const hash = await removeLiquidity(amountBn);
       setTxHash(hash);
       await waitForTx(hash);
-      refetchAll();
+      await refetchAll();
       setStep("success");
     } catch (error) {
       console.error("Withdraw failed:", error);
@@ -359,8 +355,12 @@ export function LiquidityScreen() {
                   </Label>
                   <span className="text-xs text-muted-foreground/60 font-mono">
                     {activeTab === "deposit"
-                      ? `Bal: ${formatTokenAmount(tokenBalance, decimals, 4)} ${selectedToken}`
-                      : `SFX-LP: ${formatTokenAmount(lpBalance, 6, 4)}`}
+                      ? isTokenBalanceLoading
+                        ? "Bal: Loading..."
+                        : `Bal: ${formatTokenAmount(tokenBalance, decimals, 4)} ${selectedToken}`
+                      : isLpBalanceLoading
+                        ? "SFX-LP: Loading..."
+                        : `SFX-LP: ${formatTokenAmount(lpBalance, 6, 4)}`}
                   </span>
                 </div>
                 <div className="flex space-x-2">
@@ -375,7 +375,12 @@ export function LiquidityScreen() {
                   <Button
                     variant="secondary"
                     className="h-12 px-6"
-                    disabled={step !== "idle"}
+                    disabled={
+                      step !== "idle" ||
+                      (activeTab === "deposit"
+                        ? isTokenBalanceLoading
+                        : isLpBalanceLoading)
+                    }
                     onClick={() =>
                       setAmountStr(
                         activeTab === "deposit"

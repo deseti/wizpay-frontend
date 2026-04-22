@@ -1,15 +1,61 @@
-import { createConfig, http } from "wagmi";
+import { createConfig, fallback, http } from "wagmi";
 import { injected } from "@wagmi/core";
 import { defineChain, type Chain } from "viem";
 import { sepolia } from "viem/chains";
 
-export const ARC_TESTNET_RPC_URL =
-  process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL ||
-  "https://rpc.testnet.arc.network";
+const DEFAULT_ARC_TESTNET_RPC_URLS = [
+  "https://rpc.testnet.arc.network",
+  "https://rpc.quicknode.testnet.arc.network",
+  "https://rpc.blockdaemon.testnet.arc.network",
+];
 
-export const ETHEREUM_SEPOLIA_RPC_URL =
-  process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL ||
-  "https://ethereum-sepolia-rpc.publicnode.com";
+const DEFAULT_ETHEREUM_SEPOLIA_RPC_URLS = [
+  "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://ethereum-sepolia.publicnode.com",
+];
+
+function parseRpcUrls(
+  explicitUrl: string | undefined,
+  explicitList: string | undefined,
+  defaults: string[]
+) {
+  const configured = [explicitList, explicitUrl]
+    .flatMap((value) =>
+      (value ?? "")
+        .split(/[\s,]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    );
+
+  return Array.from(new Set(configured.length > 0 ? configured : defaults));
+}
+
+function createFallbackTransport(urls: string[]) {
+  return fallback(
+    urls.map((url) =>
+      http(url, {
+        retryCount: 1,
+        timeout: 10_000,
+      })
+    )
+  );
+}
+
+export const ARC_TESTNET_RPC_URLS = parseRpcUrls(
+  process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL,
+  process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URLS,
+  DEFAULT_ARC_TESTNET_RPC_URLS
+);
+
+export const ARC_TESTNET_RPC_URL = ARC_TESTNET_RPC_URLS[0];
+
+export const ETHEREUM_SEPOLIA_RPC_URLS = parseRpcUrls(
+  process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL,
+  process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URLS,
+  DEFAULT_ETHEREUM_SEPOLIA_RPC_URLS
+);
+
+export const ETHEREUM_SEPOLIA_RPC_URL = ETHEREUM_SEPOLIA_RPC_URLS[0];
 
 /**
  * Arc Testnet — custom chain definition
@@ -24,10 +70,10 @@ export const arcTestnet = defineChain({
   },
   rpcUrls: {
     default: {
-      http: [ARC_TESTNET_RPC_URL],
+      http: ARC_TESTNET_RPC_URLS,
     },
     public: {
-      http: [ARC_TESTNET_RPC_URL],
+      http: ARC_TESTNET_RPC_URLS,
     },
   },
   blockExplorers: {
@@ -44,10 +90,10 @@ export const ethereumSepolia = defineChain({
   rpcUrls: {
     ...sepolia.rpcUrls,
     default: {
-      http: [ETHEREUM_SEPOLIA_RPC_URL],
+      http: ETHEREUM_SEPOLIA_RPC_URLS,
     },
     public: {
-      http: [ETHEREUM_SEPOLIA_RPC_URL],
+      http: ETHEREUM_SEPOLIA_RPC_URLS,
     },
   },
 });
@@ -80,7 +126,9 @@ export const config = createConfig({
   connectors,
   ssr: true,
   transports: {
-    [arcTestnet.id]: http(ARC_TESTNET_RPC_URL),
-    [ethereumSepolia.id]: http(ETHEREUM_SEPOLIA_RPC_URL),
+    [arcTestnet.id]: createFallbackTransport(ARC_TESTNET_RPC_URLS),
+    [ethereumSepolia.id]: createFallbackTransport(
+      ETHEREUM_SEPOLIA_RPC_URLS
+    ),
   },
 });

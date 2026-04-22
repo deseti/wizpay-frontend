@@ -1,3 +1,4 @@
+import { keepPreviousData } from "@tanstack/react-query";
 import { type Address, type Hex } from "viem";
 import { usePublicClient, useReadContract } from "wagmi";
 
@@ -50,16 +51,28 @@ export function useLiquidity(tokenAddress: Address) {
     abi: STABLE_FX_ADAPTER_V2_ABI,
     chainId: arcTestnet.id,
     functionName: "totalSupply",
+    query: {
+      staleTime: 30_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   // User's LP Balance (SFX-LP is the adapter itself, which is an ERC20)
-  const { data: lpBalance, refetch: refetchLpBalance } = useReadContract({
+  const {
+    data: lpBalance,
+    refetch: refetchLpBalance,
+    isLoading: lpBalanceLoading,
+  } = useReadContract({
     address: STABLE_FX_ADAPTER_V2_ADDRESS,
     abi: STABLE_FX_ADAPTER_V2_ABI,
     chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
-    query: { enabled: !!walletAddress },
+    query: {
+      enabled: !!walletAddress,
+      staleTime: 10_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   // User's deposit token allowance to the adapter (for deposit)
@@ -71,7 +84,11 @@ export function useLiquidity(tokenAddress: Address) {
     args: walletAddress
       ? [walletAddress, STABLE_FX_ADAPTER_V2_ADDRESS]
       : undefined,
-    query: { enabled: !!walletAddress },
+    query: {
+      enabled: !!walletAddress,
+      staleTime: 10_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   // User's SFX-LP allowance to the adapter (for withdraw — adapter burns from msg.sender)
@@ -85,17 +102,29 @@ export function useLiquidity(tokenAddress: Address) {
     args: walletAddress
       ? [walletAddress, STABLE_FX_ADAPTER_V2_ADDRESS]
       : undefined,
-    query: { enabled: !!walletAddress },
+    query: {
+      enabled: !!walletAddress,
+      staleTime: 10_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   // User's token balance (for deposit max)
-  const { data: tokenBalance, refetch: refetchTokenBalance } = useReadContract({
+  const {
+    data: tokenBalance,
+    refetch: refetchTokenBalance,
+    isLoading: tokenBalanceLoading,
+  } = useReadContract({
     address: tokenAddress,
     abi: ERC20_ABI,
     chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
-    query: { enabled: !!walletAddress },
+    query: {
+      enabled: !!walletAddress,
+      staleTime: 10_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   const waitForLiquidityEvent = async ({
@@ -275,13 +304,14 @@ export function useLiquidity(tokenAddress: Address) {
     });
   };
 
-  const refetchAll = () => {
-    refetchTotalSupply();
-    refetchLpBalance();
-    refetchAllowance();
-    refetchLpAllowance();
-    refetchTokenBalance();
-  };
+  const refetchAll = () =>
+    Promise.all([
+      refetchTotalSupply(),
+      refetchLpBalance(),
+      refetchAllowance(),
+      refetchLpAllowance(),
+      refetchTokenBalance(),
+    ]);
 
   return {
     totalSupply: (totalSupply as bigint) || 0n,
@@ -289,6 +319,8 @@ export function useLiquidity(tokenAddress: Address) {
     allowance: (allowance as bigint) || 0n,
     lpAllowance: (lpAllowance as bigint) || 0n,
     tokenBalance: (tokenBalance as bigint) || 0n,
+    isLpBalanceLoading: Boolean(walletAddress) && lpBalanceLoading,
+    isTokenBalanceLoading: Boolean(walletAddress) && tokenBalanceLoading,
     approveToken,
     approveLpToken,
     addLiquidity,

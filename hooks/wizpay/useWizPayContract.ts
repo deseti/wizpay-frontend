@@ -1,3 +1,4 @@
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { type Address, type Hex } from "viem";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
@@ -39,6 +40,17 @@ type BatchSettlementLog = {
 
 const POLL_INTERVAL_MS = 1500;
 const MAX_CONFIRMATION_POLLS = 20;
+const EMPTY_QUOTE_SUMMARY: QuoteSummary = {
+  estimatedAmountsOut: [],
+  totalEstimatedOut: 0n,
+  totalFees: 0n,
+};
+const EMPTY_STABLEFX_PREVIEW = {
+  quoteSummary: EMPTY_QUOTE_SUMMARY,
+  diagnostics: [] as (string | null)[],
+};
+
+type StableFxPreviewData = typeof EMPTY_STABLEFX_PREVIEW;
 
 function waitFor(ms: number) {
   return new Promise<void>((resolve) => {
@@ -81,45 +93,79 @@ export function useWizPayContract({
   const activeToken = SUPPORTED_TOKENS[state.selectedToken];
   const allowanceSpender = isStableFxMode ? permit2Address : WIZPAY_ADDRESS;
   const deferredRecipients = useDeferredValue(state.preparedRecipients);
+  const rawQuoteEnabled = Boolean(
+    walletAddress &&
+      state.preparedRecipients.length > 0 &&
+      batchAmount > 0n &&
+      state.preparedRecipients.every((r) => r.amountUnits > 0n)
+  );
 
-  const { data: currentAllowanceData, refetch: refetchAllowance } = useReadContract({
+  const {
+    data: currentAllowanceData,
+    refetch: refetchAllowance,
+    isLoading: allowanceQueryLoading,
+  } = useReadContract({
     address: activeToken.address,
     abi: ERC20_ABI,
     chainId: arcTestnet.id,
     functionName: "allowance",
     args: walletAddress ? [walletAddress, allowanceSpender] : undefined,
-    query: { enabled: !!walletAddress },
+    query: {
+      enabled: !!walletAddress,
+      staleTime: 10_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
-  const { data: currentBalanceData, refetch: refetchBalance } = useReadContract({
+  const {
+    data: currentBalanceData,
+    refetch: refetchBalance,
+    isLoading: balanceQueryLoading,
+  } = useReadContract({
     address: activeToken.address,
     abi: ERC20_ABI,
     chainId: arcTestnet.id,
     functionName: "balanceOf",
     args: walletAddress ? [walletAddress] : undefined,
-    query: { enabled: !!walletAddress },
+    query: {
+      enabled: !!walletAddress,
+      staleTime: 10_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
-  const { data: feeBpsData } = useReadContract({
+  const { data: feeBpsData, isLoading: feeQueryLoading } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
     chainId: arcTestnet.id,
     functionName: "feeBps",
+    query: {
+      staleTime: 60_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   useEffect(() => {
     refetchAllowance();
   }, [state.currentBatchNumber, refetchAllowance]);
 
-  const { data: fxEngineData } = useReadContract({
+  const { data: fxEngineData, isLoading: fxEngineQueryLoading } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
     chainId: arcTestnet.id,
     functionName: "fxEngine",
+    query: {
+      staleTime: 60_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   // Batch Estimation
-  const { data: rawQuoteData } = useReadContract({
+  const {
+    data: rawQuoteData,
+    isLoading: rawQuoteLoading,
+    isFetching: rawQuoteFetching,
+  } = useReadContract({
     address: WIZPAY_ADDRESS,
     abi: WIZPAY_ABI,
     chainId: arcTestnet.id,
@@ -130,13 +176,10 @@ export function useWizPayContract({
       state.preparedRecipients.map((r) => r.amountUnits),
     ],
     query: {
-      enabled: Boolean(
-        walletAddress &&
-          state.preparedRecipients.length > 0 &&
-          batchAmount > 0n &&
-          state.preparedRecipients.every((r) => r.amountUnits > 0n)
-      ),
-      refetchInterval: 12000,
+      enabled: rawQuoteEnabled,
+      refetchInterval: 12_000,
+      staleTime: 12_000,
+      placeholderData: keepPreviousData,
     },
   });
 
@@ -148,7 +191,11 @@ export function useWizPayContract({
   const engineAddressForBalances = isStableFxMode
     ? activeFxEngineAddress
     : (fxEngineData as Address | undefined);
-  const { data: lBalancesData, refetch: refetchEngineBalances } = useReadContracts({
+  const {
+    data: lBalancesData,
+    refetch: refetchEngineBalances,
+    isLoading: engineBalancesQueryLoading,
+  } = useReadContracts({
     contracts: [
       {
         address: USDC_A,
@@ -165,7 +212,12 @@ export function useWizPayContract({
         args: engineAddressForBalances ? [engineAddressForBalances] : undefined,
       },
     ],
-    query: { enabled: !!engineAddressForBalances, refetchInterval: 15000 },
+    query: {
+      enabled: !!engineAddressForBalances,
+      refetchInterval: 15_000,
+      staleTime: 15_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   const currentAllowance = currentAllowanceData ?? 0n;
@@ -185,12 +237,98 @@ export function useWizPayContract({
       return totalAmount + recipient.amountUnits;
     }, 0n);
   }, [activeToken.address, batchAmount, state.preparedRecipients]);
-  const [stableFxQuoteSummary, setStableFxQuoteSummary] = useState<QuoteSummary>({
-    estimatedAmountsOut: [],
-    totalEstimatedOut: 0n,
-    totalFees: 0n,
+  const stableFxPreviewQuery = useQuery({
+    queryKey: [
+      "wizpay",
+      "stablefx-preview",
+      activeToken.symbol,
+      deferredRecipients.map((recipient) => ({
+        address: recipient.address,
+        amount: recipient.amount,
+        targetToken: recipient.targetToken,
+        validAddress: recipient.validAddress,
+        amountUnits: recipient.amountUnits.toString(),
+      })),
+    ],
+    enabled: isStableFxMode && deferredRecipients.length > 0,
+    staleTime: 15_000,
+    placeholderData: keepPreviousData,
+    queryFn: async (): Promise<StableFxPreviewData> => {
+      const results = await Promise.all(
+        deferredRecipients.map(async (recipient, index) => {
+          const tokenOut = SUPPORTED_TOKENS[recipient.targetToken];
+
+          if (!recipient.validAddress || recipient.amountUnits === 0n) {
+            return {
+              amountOut: 0n,
+              feeAmount: 0n,
+              diagnostic: null as string | null,
+            };
+          }
+
+          if (sameAddress(activeToken.address, tokenOut.address)) {
+            return {
+              amountOut: recipient.amountUnits,
+              feeAmount: 0n,
+              diagnostic: null as string | null,
+            };
+          }
+
+          try {
+            const quote = await getQuote({
+              sourceCurrency: activeToken.symbol,
+              targetCurrency: recipient.targetToken,
+              sourceAmount: recipient.amount,
+            });
+
+            if (!quote) {
+              return {
+                amountOut: 0n,
+                feeAmount: 0n,
+                diagnostic: `Circle quote is unavailable for row ${index + 1}.`,
+              };
+            }
+
+            return {
+              amountOut: parseAmountToUnits(quote.targetAmount, tokenOut.decimals),
+              feeAmount: parseAmountToUnits(quote.feeAmount, tokenOut.decimals),
+              diagnostic: null as string | null,
+            };
+          } catch (error) {
+            const friendlyMessage = getFriendlyErrorMessage(error);
+
+            return {
+              amountOut: 0n,
+              feeAmount: 0n,
+              diagnostic: isStableFxAuthorizationError(error)
+                ? friendlyMessage
+                : `Circle quote failed for row ${index + 1}: ${friendlyMessage}`,
+            };
+          }
+        })
+      );
+
+      return {
+        quoteSummary: {
+          estimatedAmountsOut: results.map((result) => result.amountOut),
+          totalEstimatedOut: results.reduce(
+            (total, result) => total + result.amountOut,
+            0n
+          ),
+          totalFees: results.reduce(
+            (total, result) => total + result.feeAmount,
+            0n
+          ),
+        },
+        diagnostics: results.map((result) => result.diagnostic),
+      };
+    },
   });
-  const [stableFxDiagnostics, setStableFxDiagnostics] = useState<(string | null)[]>([]);
+
+  const stableFxPreviewData =
+    deferredRecipients.length === 0
+      ? EMPTY_STABLEFX_PREVIEW
+      : stableFxPreviewQuery.data ?? EMPTY_STABLEFX_PREVIEW;
 
   const engineBalances = useMemo<Record<TokenSymbol, bigint>>(() => {
     return {
@@ -203,129 +341,36 @@ export function useWizPayContract({
     if (isStableFxMode) {
       return {
         estimatedAmountsOut: state.preparedRecipients.map(
-          (_, index) => stableFxQuoteSummary.estimatedAmountsOut[index] ?? 0n
+          (_, index) =>
+            stableFxPreviewData.quoteSummary.estimatedAmountsOut[index] ?? 0n
         ),
-        totalEstimatedOut: stableFxQuoteSummary.totalEstimatedOut,
-        totalFees: stableFxQuoteSummary.totalFees,
+        totalEstimatedOut: stableFxPreviewData.quoteSummary.totalEstimatedOut,
+        totalFees: stableFxPreviewData.quoteSummary.totalFees,
       };
     }
 
     if (!rawQuoteData) {
-      return {
-        estimatedAmountsOut: state.preparedRecipients.map(() => 0n),
-        totalEstimatedOut: 0n,
-        totalFees: 0n,
-      };
+      return EMPTY_QUOTE_SUMMARY;
     }
     return {
       estimatedAmountsOut: [...rawQuoteData[0]],
       totalEstimatedOut: rawQuoteData[1],
       totalFees: rawQuoteData[2],
     };
-  }, [rawQuoteData, stableFxQuoteSummary, state.preparedRecipients]);
+  }, [rawQuoteData, stableFxPreviewData, state.preparedRecipients]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function hydrateStableFxPreview() {
-      if (!isStableFxMode) {
-        setStableFxQuoteSummary({
-          estimatedAmountsOut: [],
-          totalEstimatedOut: 0n,
-          totalFees: 0n,
-        });
-        setStableFxDiagnostics([]);
-        return;
-      }
-
-      if (deferredRecipients.length === 0) {
-        setStableFxQuoteSummary({
-          estimatedAmountsOut: [],
-          totalEstimatedOut: 0n,
-          totalFees: 0n,
-        });
-        setStableFxDiagnostics([]);
-        return;
-      }
-
-      const estimatedAmountsOut = deferredRecipients.map(() => 0n);
-      const diagnostics = deferredRecipients.map(() => null as string | null);
-      let totalEstimatedOut = 0n;
-      let totalFees = 0n;
-      let stableFxAuthError: string | null = null;
-
-      for (let index = 0; index < deferredRecipients.length; index += 1) {
-        const recipient = deferredRecipients[index];
-        const tokenOut = SUPPORTED_TOKENS[recipient.targetToken];
-
-        if (!recipient.validAddress || recipient.amountUnits === 0n) {
-          continue;
-        }
-
-        if (sameAddress(activeToken.address, tokenOut.address)) {
-          estimatedAmountsOut[index] = recipient.amountUnits;
-          totalEstimatedOut += recipient.amountUnits;
-          continue;
-        }
-
-        if (stableFxAuthError) {
-          diagnostics[index] = stableFxAuthError;
-          continue;
-        }
-
-        try {
-          const quote = await getQuote({
-            sourceCurrency: activeToken.symbol,
-            targetCurrency: recipient.targetToken,
-            sourceAmount: recipient.amount,
-          });
-
-          if (!quote) {
-            diagnostics[index] = `Circle quote is unavailable for row ${index + 1}.`;
-            continue;
-          }
-
-          const amountOut = parseAmountToUnits(
-            quote.targetAmount,
-            tokenOut.decimals
-          );
-          const feeAmount = parseAmountToUnits(
-            quote.feeAmount,
-            tokenOut.decimals
-          );
-
-          estimatedAmountsOut[index] = amountOut;
-          totalEstimatedOut += amountOut;
-          totalFees += feeAmount;
-        } catch (error) {
-          const friendlyMessage = getFriendlyErrorMessage(error);
-
-          if (isStableFxAuthorizationError(error)) {
-            stableFxAuthError = friendlyMessage;
-            diagnostics[index] = friendlyMessage;
-            continue;
-          }
-
-          diagnostics[index] = `Circle quote failed for row ${index + 1}: ${friendlyMessage}`;
-        }
-      }
-
-      if (cancelled) return;
-
-      setStableFxQuoteSummary({
-        estimatedAmountsOut,
-        totalEstimatedOut,
-        totalFees,
-      });
-      setStableFxDiagnostics(diagnostics);
-    }
-
-    void hydrateStableFxPreview();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeToken.address, activeToken.symbol, deferredRecipients]);
+  const allowanceLoading = Boolean(walletAddress) && allowanceQueryLoading;
+  const balanceLoading = Boolean(walletAddress) && balanceQueryLoading;
+  const feeLoading = !isStableFxMode && feeQueryLoading;
+  const engineLoading =
+    Boolean(engineAddressForBalances) &&
+    (engineBalancesQueryLoading || (!isStableFxMode && fxEngineQueryLoading));
+  const quoteLoading = isStableFxMode
+    ? deferredRecipients.length > 0 && stableFxPreviewQuery.isLoading
+    : rawQuoteEnabled && rawQuoteLoading;
+  const quoteRefreshing = isStableFxMode
+    ? Boolean(stableFxPreviewQuery.isFetching && stableFxPreviewQuery.data)
+    : Boolean(rawQuoteFetching && rawQuoteData);
 
   const feeBps = useMemo(() => {
     if (!isStableFxMode) {
@@ -342,7 +387,7 @@ export function useWizPayContract({
   const rowDiagnostics = useMemo<(string | null)[]>(() => {
     if (isStableFxMode) {
       return state.preparedRecipients.map(
-        (_, index) => stableFxDiagnostics[index] ?? null
+        (_, index) => stableFxPreviewData.diagnostics[index] ?? null
       );
     }
 
@@ -361,7 +406,7 @@ export function useWizPayContract({
       }
       return null;
     });
-  }, [engineBalances, stableFxDiagnostics, state.preparedRecipients, quoteSummary.estimatedAmountsOut, state.selectedToken]);
+  }, [engineBalances, stableFxPreviewData.diagnostics, state.preparedRecipients, quoteSummary.estimatedAmountsOut, state.selectedToken]);
 
   const hasRouteIssue = rowDiagnostics.some(Boolean);
   const needsApproval = approvalAmount > 0n && currentAllowance < approvalAmount;
@@ -880,6 +925,12 @@ export function useWizPayContract({
     fxEngineData,
     engineBalances,
     quoteSummary,
+    allowanceLoading,
+    balanceLoading,
+    feeLoading,
+    engineLoading,
+    quoteLoading,
+    quoteRefreshing,
     rowDiagnostics,
     hasRouteIssue,
     needsApproval,

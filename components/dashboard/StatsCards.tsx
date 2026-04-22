@@ -25,18 +25,21 @@ import {
   TOKEN_OPTIONS,
   type TokenSymbol,
 } from "@/lib/wizpay";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface StatsCardsProps {
   selectedToken: TokenSymbol;
   onTokenChange: (token: TokenSymbol) => void;
   isBusy: boolean;
   currentBalance: bigint;
+  balanceLoading: boolean;
   activeToken: { symbol: TokenSymbol; decimals: number };
   walletAddress: string | undefined;
   totalRouted: bigint;
   historyCount: number;
   engineBalances: Record<TokenSymbol, bigint>;
   fxEngineData: Address | undefined;
+  engineLoading: boolean;
   onClearMessages: () => void;
 }
 
@@ -52,12 +55,14 @@ export function StatsCards({
   onTokenChange,
   isBusy,
   currentBalance,
+  balanceLoading,
   activeToken,
   walletAddress,
   totalRouted,
   historyCount,
   engineBalances,
   fxEngineData,
+  engineLoading,
   onClearMessages,
 }: StatsCardsProps) {
   return (
@@ -117,9 +122,16 @@ export function StatsCards({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 relative">
-          <p className="text-3xl font-bold tracking-tight">
-            {formatTokenAmount(currentBalance, activeToken.decimals, 2)}
-          </p>
+          {balanceLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-9 w-32 bg-muted/20" />
+              <Skeleton className="h-4 w-24 bg-muted/20" />
+            </div>
+          ) : (
+            <p className="text-3xl font-bold tracking-tight">
+              {formatTokenAmount(currentBalance, activeToken.decimals, 2)}
+            </p>
+          )}
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Badge variant="outline" className="text-emerald-300/80 border-emerald-500/20 bg-emerald-500/5">{activeToken.symbol}</Badge>
             <span className="text-xs font-mono">
@@ -171,23 +183,31 @@ export function StatsCards({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2.5 relative">
-          <div className="flex items-center justify-between rounded-xl border border-border/40 bg-background/40 px-3 py-2.5 transition-colors hover:border-primary/20">
-            <span className="text-sm text-muted-foreground">USDC</span>
-            <span className="font-mono text-sm font-medium">
-              {formatTokenAmount(engineBalances.USDC, 6, 2)}
-            </span>
-          </div>
-          <div className="flex items-center justify-between rounded-xl border border-border/40 bg-background/40 px-3 py-2.5 transition-colors hover:border-primary/20">
-            <span className="text-sm text-muted-foreground">EURC</span>
-            <span className="font-mono text-sm font-medium">
-              {formatTokenAmount(engineBalances.EURC, 6, 2)}
-            </span>
-          </div>
+          {engineLoading ? (
+            <div className="space-y-2.5">
+              <Skeleton className="h-11 w-full rounded-xl bg-muted/20" />
+              <Skeleton className="h-11 w-full rounded-xl bg-muted/20" />
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between rounded-xl border border-border/40 bg-background/40 px-3 py-2.5 transition-colors hover:border-primary/20">
+                <span className="text-sm text-muted-foreground">USDC</span>
+                <span className="font-mono text-sm font-medium">
+                  {formatTokenAmount(engineBalances.USDC, 6, 2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between rounded-xl border border-border/40 bg-background/40 px-3 py-2.5 transition-colors hover:border-primary/20">
+                <span className="text-sm text-muted-foreground">EURC</span>
+                <span className="font-mono text-sm font-medium">
+                  {formatTokenAmount(engineBalances.EURC, 6, 2)}
+                </span>
+              </div>
+            </>
+          )}
           <p className="text-[11px] text-muted-foreground/60 font-mono">
-            {fxProviderLabel}:{" "}
-            {fxEngineData
-              ? formatCompactAddress(fxEngineData)
-              : formatCompactAddress(activeFxEngineAddress)}
+            {engineLoading
+              ? "Loading engine liquidity..."
+              : `${fxProviderLabel}: ${fxEngineData ? formatCompactAddress(fxEngineData) : formatCompactAddress(activeFxEngineAddress)}`}
           </p>
         </CardContent>
       </Card>

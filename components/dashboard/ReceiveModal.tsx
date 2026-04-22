@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { Copy, Check, QrCode } from "lucide-react";
 import { useState, useCallback } from "react";
 import {
@@ -35,8 +36,11 @@ export function ReceiveModal({ open, onClose }: ReceiveModalProps) {
     }
   }, [smartWalletAddress, toast]);
 
-  const qrUrl = smartWalletAddress
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(smartWalletAddress)}&bgcolor=1a1130&color=ffffff`
+  const receiveUri = smartWalletAddress
+    ? `ethereum:${smartWalletAddress}`
+    : null;
+  const qrUrl = receiveUri
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(receiveUri)}&bgcolor=1a1130&color=ffffff`
     : null;
 
   return (
@@ -48,7 +52,7 @@ export function ReceiveModal({ open, onClose }: ReceiveModalProps) {
             Receive Tokens
           </DialogTitle>
           <DialogDescription>
-            Share your wallet address or scan the QR code to receive tokens.
+            Share your wallet address or let someone scan the QR with any EVM wallet.
           </DialogDescription>
         </DialogHeader>
 
@@ -57,12 +61,13 @@ export function ReceiveModal({ open, onClose }: ReceiveModalProps) {
             <div className="h-[200px] w-[200px] rounded-2xl bg-muted/25 animate-pulse" />
           ) : qrUrl ? (
             <div className="rounded-2xl border border-border/40 bg-white p-3">
-              <img
+              <Image
                 src={qrUrl}
                 alt="Wallet QR Code"
                 width={200}
                 height={200}
                 className="rounded-lg"
+                unoptimized
               />
             </div>
           ) : (

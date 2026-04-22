@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { QrCode, ArrowRightLeft } from "lucide-react";
+import { QrCode } from "lucide-react";
 
 import { BatchComposer } from "@/components/dashboard/BatchComposer";
 import { PreflightPanel } from "@/components/dashboard/PreflightPanel";
@@ -53,12 +52,14 @@ function SendWorkspace() {
           onTokenChange={wp.setSelectedToken}
           isBusy={wp.isBusy}
           currentBalance={wp.currentBalance}
+          balanceLoading={wp.balanceLoading}
           activeToken={wp.activeToken}
           walletAddress={walletAddress}
           totalRouted={wp.totalRouted}
           historyCount={wp.history.length}
           engineBalances={wp.engineBalances}
           fxEngineData={wp.fxEngineData}
+          engineLoading={wp.engineLoading}
           onClearMessages={() => {
             wp.setStatusMessage(null);
             wp.setErrorMessage(null);
@@ -78,6 +79,8 @@ function SendWorkspace() {
             batchAmount={wp.batchAmount}
             validRecipientCount={wp.validRecipientCount}
             quoteSummary={wp.quoteSummary}
+            quoteLoading={wp.quoteLoading}
+            quoteRefreshing={wp.quoteRefreshing}
             rowDiagnostics={wp.rowDiagnostics}
             estimatedGas={wp.estimatedGas}
             isBusy={wp.isBusy}
@@ -103,6 +106,8 @@ function SendWorkspace() {
             approvalAmount={wp.approvalAmount}
             activeToken={wp.activeToken}
             feeBps={wp.feeBps}
+            allowanceLoading={wp.allowanceLoading}
+            feeLoading={wp.feeLoading}
             rowDiagnostics={wp.rowDiagnostics}
             insufficientBalance={wp.insufficientBalance}
             selectedToken={wp.selectedToken}

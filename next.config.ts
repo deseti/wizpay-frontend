@@ -9,6 +9,14 @@ const reownAppKitCoreShim = path.resolve(
 const reownAppKitCoreShimImport = "./lib/shims/reown-appkit-core.ts";
 
 const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "api.qrserver.com",
+      },
+    ],
+  },
   turbopack: {
     root: __dirname,
     resolveAlias: {

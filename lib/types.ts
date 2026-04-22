@@ -98,6 +98,12 @@ export interface WizPayState {
   fxEngineData: Address | undefined;
   engineBalances: Record<TokenSymbol, bigint>;
   quoteSummary: QuoteSummary;
+  allowanceLoading: boolean;
+  balanceLoading: boolean;
+  feeLoading: boolean;
+  engineLoading: boolean;
+  quoteLoading: boolean;
+  quoteRefreshing: boolean;
 
   /* diagnostics */
   rowDiagnostics: (string | null)[];

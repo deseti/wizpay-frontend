@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { TokenSymbol } from "@/lib/wizpay";
 import { formatTokenAmount } from "@/lib/wizpay";
 
@@ -16,6 +17,8 @@ interface PreflightPanelProps {
   approvalAmount: bigint;
   activeToken: { symbol: TokenSymbol; decimals: number };
   feeBps: bigint;
+  allowanceLoading: boolean;
+  feeLoading: boolean;
   rowDiagnostics: (string | null)[];
   insufficientBalance: boolean;
   selectedToken: TokenSymbol;
@@ -26,6 +29,8 @@ export function PreflightPanel({
   approvalAmount,
   activeToken,
   feeBps,
+  allowanceLoading,
+  feeLoading,
   rowDiagnostics,
   insufficientBalance,
   selectedToken,
@@ -58,10 +63,14 @@ export function PreflightPanel({
             </p>
             <div className={`h-2 w-2 rounded-full ${allowanceOk ? 'bg-emerald-400 shadow-sm shadow-emerald-400/40' : 'bg-muted-foreground/30'}`} />
           </div>
-          <p className="mt-2 font-mono text-sm font-medium">
-            {formatTokenAmount(currentAllowance, activeToken.decimals, 2)}{" "}
-            {activeToken.symbol}
-          </p>
+            {allowanceLoading ? (
+              <Skeleton className="mt-2 h-4 w-28 bg-muted/20" />
+            ) : (
+              <p className="mt-2 font-mono text-sm font-medium">
+                {formatTokenAmount(currentAllowance, activeToken.decimals, 2)}{" "}
+                {activeToken.symbol}
+              </p>
+            )}
           <p className="mt-1 text-[11px] text-muted-foreground/60">
             Required:{" "}
             {formatTokenAmount(approvalAmount, activeToken.decimals, 2)}{" "}
@@ -99,9 +108,13 @@ export function PreflightPanel({
             <Percent className="h-3 w-3" />
             Fee config
           </p>
-          <p className="mt-2 text-sm font-medium">
-            {(Number(feeBps) / 100).toFixed(2)}% <span className="text-muted-foreground/60 text-xs font-normal">({feeBps.toString()} bps)</span>
-          </p>
+          {feeLoading ? (
+            <Skeleton className="mt-2 h-4 w-24 bg-muted/20" />
+          ) : (
+            <p className="mt-2 text-sm font-medium">
+              {(Number(feeBps) / 100).toFixed(2)}% <span className="text-muted-foreground/60 text-xs font-normal">({feeBps.toString()} bps)</span>
+            </p>
+          )}
         </div>
 
         {/* Insufficient balance warning */}
