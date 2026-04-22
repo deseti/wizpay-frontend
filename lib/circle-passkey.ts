@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  createAddressMapping,
+  OwnerIdentifierType,
   WebAuthnMode,
   toCircleSmartAccount,
   toModularTransport,
@@ -14,6 +16,7 @@ import {
   toWebAuthnAccount,
 } from "viem/account-abstraction";
 import type { Transport } from "viem";
+import { parsePublicKey } from "webauthn-p256";
 
 import { ERC20_ABI } from "@/constants/erc20";
 import { TOKEN_OPTIONS } from "@/lib/wizpay";
@@ -42,8 +45,10 @@ export type PasskeyWalletDescriptor = {
 
 export type PasskeyChainRuntime = {
   account: Awaited<ReturnType<typeof toCircleSmartAccount>>;
+  addressMappingReady: boolean;
   bundlerClient: ReturnType<typeof createBundlerClient>;
   chainId: number;
+  credential: WebAuthnCredential;
   readPublicClient: ReturnType<typeof createPublicClient>;
   transportMode: "circle-modular" | "rpc-fallback";
   walletPublicClient: ReturnType<typeof createPublicClient>;
@@ -313,8 +318,10 @@ async function createPasskeyRuntime(
 
     return {
       account,
+      addressMappingReady: false,
       bundlerClient,
       chainId: chainConfig.chain.id,
+      credential,
       readPublicClient,
       transportMode,
       wallet: {
@@ -448,6 +455,40 @@ export async function getPasskeyTokenBalances(
   return balances;
 }
 
+async function ensurePasskeyAddressMapping(runtime: PasskeyChainRuntime) {
+  if (runtime.transportMode !== "circle-modular" || runtime.addressMappingReady) {
+    return;
+  }
+
+  try {
+    const publicKeyOwner = parsePublicKey(runtime.credential.publicKey);
+
+    await createAddressMapping(runtime.walletPublicClient, {
+      walletAddress: runtime.wallet.address as Hex,
+      owners: [
+        {
+          type: OwnerIdentifierType.WebAuthn,
+          identifier: {
+            publicKeyX: publicKeyOwner.x.toString(),
+            publicKeyY: publicKeyOwner.y.toString(),
+          },
+        },
+      ],
+    });
+  } catch (error) {
+    const normalizedMessage = getErrorText(error).toLowerCase();
+
+    if (
+      !normalizedMessage.includes("already exists") &&
+      !normalizedMessage.includes("already known")
+    ) {
+      throw error;
+    }
+  }
+
+  runtime.addressMappingReady = true;
+}
+
 export async function sendPasskeyUserOperation({
   callData,
   contractAddress,
@@ -458,6 +499,8 @@ export async function sendPasskeyUserOperation({
   runtime: PasskeyChainRuntime;
 }) {
   try {
+    await ensurePasskeyAddressMapping(runtime);
+
     const userOpHash = await runtime.bundlerClient.sendUserOperation({
       account: runtime.account,
       calls: [{ data: callData, to: contractAddress }],
