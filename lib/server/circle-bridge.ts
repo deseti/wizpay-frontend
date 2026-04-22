@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
+import type { ChainDefinition } from "@circle-fin/app-kit";
+import { ArcTestnet, EthereumSepolia } from "@circle-fin/app-kit/chains";
+import { ViemAdapter } from "@circle-fin/adapter-viem-v2";
 import { BridgeKit } from "@circle-fin/bridge-kit";
 import { BridgeChain } from "@circle-fin/bridge-kit/chains";
+import { http as circleWalletsHttp } from "@circle-fin/usdckit/providers/circle-wallets";
+import { createPublicClient, createWalletClient, http } from "viem";
 
 import { getRedisClient } from "@/lib/redis";
 import {
@@ -98,6 +102,14 @@ interface QueuedCircleBridgeTransfer {
 
 const BRIDGE_REDIS_KEY_PREFIX = "bridge:";
 const DEFAULT_BRIDGE_REDIS_TTL_SECONDS = 1_800;
+const DEFAULT_BRIDGE_TX_WAIT_TIMEOUT_MS = 600_000;
+const DEFAULT_BRIDGE_RPC_POLLING_INTERVAL_MS = 2_000;
+const ARC_TESTNET_RPC_URL =
+  normalizeOptionalString(process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL) ||
+  "https://rpc.testnet.arc.network";
+const ETHEREUM_SEPOLIA_RPC_URL =
+  normalizeOptionalString(process.env.NEXT_PUBLIC_ETHEREUM_SEPOLIA_RPC_URL) ||
+  "https://ethereum-sepolia-rpc.publicnode.com";
 
 const BRIDGE_CHAIN_LABELS: Record<CircleTransferBlockchain, string> = {
   "ARC-TESTNET": "Arc Testnet",
@@ -116,6 +128,33 @@ const USDC_TOKEN_BY_CHAIN: Record<CircleTransferBlockchain, string> = {
   "ARC-TESTNET": "0x3600000000000000000000000000000000000000",
   "ETH-SEPOLIA": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
 };
+
+type BridgeAdapterCapabilities = ConstructorParameters<typeof ViemAdapter>[1];
+
+const BRIDGE_SUPPORTED_CHAINS = [
+  withExplicitBridgeRpcEndpoint(ArcTestnet as unknown as ChainDefinition, ARC_TESTNET_RPC_URL),
+  withExplicitBridgeRpcEndpoint(
+    EthereumSepolia as unknown as ChainDefinition,
+    ETHEREUM_SEPOLIA_RPC_URL
+  ),
+] as unknown as BridgeAdapterCapabilities["supportedChains"];
+
+class CircleBridgeViemAdapter extends ViemAdapter {
+  override async waitForTransaction(
+    txHash: Parameters<ViemAdapter["waitForTransaction"]>[0],
+    config: Parameters<ViemAdapter["waitForTransaction"]>[1],
+    chain: Parameters<ViemAdapter["waitForTransaction"]>[2]
+  ) {
+    return super.waitForTransaction(
+      txHash,
+      {
+        ...config,
+        timeout: config?.timeout ?? getBridgeTransactionWaitTimeoutMs(),
+      },
+      chain
+    );
+  }
+}
 
 export async function queueCircleBridgeTransfer(
   input: CreateCircleBridgeTransferInput
@@ -680,17 +719,95 @@ function createBridgeRuntime() {
 
   try {
     return {
-      adapter: createCircleWalletsAdapter({
-        apiKey: config.circleApiKey,
-        entitySecret: config.circleEntitySecret,
-        baseUrl: config.circleWalletsBaseUrl,
-      }),
+      adapter: createBridgeAdapter(config),
       kit: new BridgeKit(),
       config,
     };
   } catch (error) {
     throw toCircleBridgeError(error, {});
   }
+}
+
+function createBridgeAdapter(config: CircleBridgeConfig) {
+  return new CircleBridgeViemAdapter(
+    {
+      getPublicClient: ({ chain }) =>
+        createPublicClient({
+          chain,
+          pollingInterval: getBridgeRpcPollingIntervalMs(),
+          transport: http(getBridgeRpcUrl(chain.id)),
+        }),
+      getWalletClient: ({ chain }) =>
+        createWalletClient({
+          chain,
+          transport: circleWalletsHttp({
+            apiKey: config.circleApiKey,
+            entitySecret: config.circleEntitySecret,
+            baseUrl: config.circleWalletsBaseUrl,
+            chainId: chain.id,
+            pollingInterval: getBridgeRpcPollingIntervalMs(),
+            fallbackTransport: http(getBridgeRpcUrl(chain.id)),
+          }),
+        }),
+    },
+    {
+      addressContext: "developer-controlled",
+      supportedChains: BRIDGE_SUPPORTED_CHAINS,
+    }
+  );
+}
+
+function withExplicitBridgeRpcEndpoint(
+  chain: ChainDefinition,
+  rpcEndpoint: string
+): ChainDefinition {
+  return {
+    ...chain,
+    rpcEndpoints: [rpcEndpoint],
+  };
+}
+
+function getBridgeRpcUrl(chainId: number): string {
+  if (chainId === 5_042_002) {
+    return ARC_TESTNET_RPC_URL;
+  }
+
+  if (chainId === 11_155_111) {
+    return ETHEREUM_SEPOLIA_RPC_URL;
+  }
+
+  throw new CircleTransferError(
+    `Unsupported bridge RPC chainId ${chainId}.`,
+    500,
+    "CIRCLE_BRIDGE_RPC_CHAIN_UNSUPPORTED",
+    { chainId }
+  );
+}
+
+function getBridgeTransactionWaitTimeoutMs() {
+  const configuredTimeout = Number.parseInt(
+    process.env.CIRCLE_BRIDGE_TX_WAIT_TIMEOUT_MS || "",
+    10
+  );
+
+  if (Number.isFinite(configuredTimeout) && configuredTimeout > 0) {
+    return configuredTimeout;
+  }
+
+  return DEFAULT_BRIDGE_TX_WAIT_TIMEOUT_MS;
+}
+
+function getBridgeRpcPollingIntervalMs() {
+  const configuredInterval = Number.parseInt(
+    process.env.CIRCLE_BRIDGE_RPC_POLLING_INTERVAL_MS || "",
+    10
+  );
+
+  if (Number.isFinite(configuredInterval) && configuredInterval > 0) {
+    return configuredInterval;
+  }
+
+  return DEFAULT_BRIDGE_RPC_POLLING_INTERVAL_MS;
 }
 
 function assertBridgeConfig(config: CircleBridgeConfig) {
