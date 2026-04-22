@@ -8,7 +8,7 @@ import {
   toWebAuthnCredential,
   type WebAuthnCredential,
 } from "@circle-fin/modular-wallets-core";
-import { createPublicClient, http, type Address, type Hex } from "viem";
+import { formatUnits, createPublicClient, http, type Address, type Hex } from "viem";
 import {
   createBundlerClient,
   toWebAuthnAccount,
@@ -411,20 +411,25 @@ export async function getPasskeyTokenBalances(
   runtime: PasskeyChainRuntime
 ): Promise<PasskeyTokenBalance[]> {
   const updatedAt = new Date().toISOString();
+  const balanceClient =
+    runtime.transportMode === "circle-modular"
+      ? runtime.walletPublicClient
+      : runtime.readPublicClient;
 
   const balances: PasskeyTokenBalance[] = [];
 
   for (const token of TOKEN_OPTIONS) {
     try {
-      const amount = await runtime.readPublicClient.readContract({
+      const amount = await balanceClient.readContract({
         abi: ERC20_ABI,
         address: token.address,
         args: [runtime.wallet.address as Address],
         functionName: "balanceOf",
       });
+      const normalizedAmount = formatUnits(amount, token.decimals);
 
       balances.push({
-        amount: amount.toString(),
+        amount: normalizedAmount,
         raw: {
           amount: amount.toString(),
           blockchain: runtime.wallet.blockchain,
@@ -456,6 +461,7 @@ export async function sendPasskeyUserOperation({
     const userOpHash = await runtime.bundlerClient.sendUserOperation({
       account: runtime.account,
       calls: [{ data: callData, to: contractAddress }],
+      paymaster: runtime.transportMode === "circle-modular" ? true : undefined,
     });
     const receipt = await runtime.bundlerClient.waitForUserOperationReceipt({
       hash: userOpHash,
