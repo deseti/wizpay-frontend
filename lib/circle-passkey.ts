@@ -2,6 +2,7 @@
 
 import {
   createAddressMapping,
+  modularWalletActions,
   OwnerIdentifierType,
   WebAuthnMode,
   toCircleSmartAccount,
@@ -489,6 +490,27 @@ async function ensurePasskeyAddressMapping(runtime: PasskeyChainRuntime) {
   runtime.addressMappingReady = true;
 }
 
+async function getPasskeyUserOperationFees(runtime: PasskeyChainRuntime) {
+  if (runtime.transportMode !== "circle-modular") {
+    return {};
+  }
+
+  const modularClient = runtime.walletPublicClient.extend(modularWalletActions);
+  const gasPrice = await modularClient.getUserOperationGasPrice();
+  const preferredLevel = gasPrice.medium ?? gasPrice.high ?? gasPrice.low;
+
+  if (!preferredLevel?.maxFeePerGas || !preferredLevel?.maxPriorityFeePerGas) {
+    throw new Error(
+      `Circle did not return user-operation gas fees for ${runtime.wallet.blockchain}.`
+    );
+  }
+
+  return {
+    maxFeePerGas: BigInt(preferredLevel.maxFeePerGas),
+    maxPriorityFeePerGas: BigInt(preferredLevel.maxPriorityFeePerGas),
+  };
+}
+
 export async function sendPasskeyUserOperation({
   callData,
   contractAddress,
@@ -500,10 +522,12 @@ export async function sendPasskeyUserOperation({
 }) {
   try {
     await ensurePasskeyAddressMapping(runtime);
+    const userOperationFees = await getPasskeyUserOperationFees(runtime);
 
     const userOpHash = await runtime.bundlerClient.sendUserOperation({
       account: runtime.account,
       calls: [{ data: callData, to: contractAddress }],
+      ...userOperationFees,
       paymaster: runtime.transportMode === "circle-modular" ? true : undefined,
     });
     const receipt = await runtime.bundlerClient.waitForUserOperationReceipt({
