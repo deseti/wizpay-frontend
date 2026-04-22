@@ -136,11 +136,13 @@ export function getCirclePasskeyConfig(): CirclePasskeyConfig {
   const clientUrl =
     process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_CLIENT_URL?.trim() ||
     DEFAULT_CIRCLE_PASSKEY_CLIENT_URL;
+  const defaultArcModularUrl = `${clientUrl}/arcTestnet`;
 
   return {
-    arcModularUrl: normalizeOptionalUrl(
-      process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_ARC_TESTNET
-    ),
+    arcModularUrl:
+      normalizeOptionalUrl(
+        process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_MODULAR_RPC_URL_ARC_TESTNET
+      ) ?? defaultArcModularUrl,
     clientKey: process.env.NEXT_PUBLIC_CIRCLE_PASSKEY_CLIENT_KEY?.trim() || "",
     clientUrl,
     rpId:
