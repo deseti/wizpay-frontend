@@ -2,8 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRightLeft, Coins, Home, Repeat, Route, Wallet } from "lucide-react";
+import { ArrowRightLeft, Coins, Copy, Home, Repeat, Route, Wallet } from "lucide-react";
+import { useCircleWallet } from "@/components/providers/CircleWalletProvider";
+import { useHybridWallet } from "@/components/providers/HybridWalletProvider";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { FaucetButton } from "./FaucetButton";
 
@@ -18,6 +22,46 @@ const navItems = [
 
 export function DashboardSidebar() {
   const pathname = usePathname();
+  const { authMethod, authenticated, getDevCredentials, primaryWallet } = useCircleWallet();
+  const { activeWalletAddress } = useHybridWallet();
+  const { toast } = useToast();
+  const showDevCredentialsButton =
+    authenticated &&
+    authMethod !== "passkey" &&
+    Boolean(primaryWallet?.id) &&
+    Boolean(activeWalletAddress);
+
+  async function copyDevCredentials() {
+    const devCredentials = getDevCredentials();
+
+    if (!devCredentials || !activeWalletAddress) {
+      toast({
+        title: "No credentials available",
+        description:
+          "Circle Google or email sessions expose dev credentials after the active wallet is loaded.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        JSON.stringify({
+          ...devCredentials,
+          treasuryAddress: activeWalletAddress,
+        })
+      );
+      toast({ title: "Credentials Copied!" });
+    } catch (error) {
+      console.error(error);
+      toast({
+        title: "Failed to copy credentials",
+        description:
+          "Clipboard access was blocked or unavailable in this browser.",
+        variant: "destructive",
+      });
+    }
+  }
 
   return (
     <aside className="sticky top-0 hidden h-screen w-64 flex-col border-r border-border/30 bg-background/50 backdrop-blur-2xl md:flex rounded-none shadow-2xl shadow-black/20">
@@ -93,7 +137,24 @@ export function DashboardSidebar() {
 
       {/* Footer Area */}
       <div className="mt-auto p-4 border-t border-border/30 bg-card/15 space-y-4">
-        <FaucetButton />
+        <FaucetButton
+          walletActions={
+            showDevCredentialsButton ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void copyDevCredentials();
+                }}
+                className="w-full justify-center gap-1.5 border border-border/30 bg-background/20 text-xs text-muted-foreground hover:border-primary/25 hover:bg-primary/8 hover:text-primary"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy Dev Credentials
+              </Button>
+            ) : null
+          }
+        />
         <p className="text-[10px] text-center text-muted-foreground/40 font-mono">
           v1.0.0 · Arc Testnet
         </p>

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { Droplet, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,11 @@ function truncateAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-export function FaucetButton() {
+interface FaucetButtonProps {
+  walletActions?: ReactNode;
+}
+
+export function FaucetButton({ walletActions }: FaucetButtonProps) {
   const {
     smartWalletAddress,
     isLoadingSmartWalletAddress,
@@ -64,6 +69,7 @@ export function FaucetButton() {
             Fund this Circle user wallet with testnet assets before running payroll,
             swap, or bridge flows as they move to Circle execution.
           </p>
+          {walletActions ? <div className="pt-1">{walletActions}</div> : null}
         </div>
       )}
 

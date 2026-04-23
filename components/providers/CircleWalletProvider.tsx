@@ -96,6 +96,12 @@ type CircleWalletTokenBalance = {
   updatedAt: string | null;
 };
 
+type CircleDevCredentials = {
+  key: string;
+  token: string;
+  walletId: string;
+};
+
 type StoredLoginConfig = {
   email?: string | null;
   loginConfigs: Record<string, unknown>;
@@ -156,6 +162,7 @@ type CircleWalletContextValue = {
     payload: Record<string, unknown>
   ) => Promise<CircleChallengeHandle>;
   executeChallenge: (challengeId: string) => Promise<unknown>;
+  getDevCredentials: () => CircleDevCredentials | null;
   getWalletBalances: (walletId: string) => Promise<CircleWalletTokenBalance[]>;
   hasPendingEmailOtp: boolean;
   isAuthenticating: boolean;
@@ -1981,6 +1988,29 @@ export function CircleWalletProvider({
     setWallets([]);
   }, [clearPasskeyState, clearStoredLoginConfig, persistSession]);
 
+  const primaryWallet = arcWallet ?? sepoliaWallet ?? wallets[0] ?? null;
+
+  const getDevCredentials = useCallback(() => {
+    const resolvedSession =
+      session && !isPasskeySession(session)
+        ? session
+        : readStoredJson<CircleSession>(SESSION_STORAGE_KEY);
+
+    if (
+      !primaryWallet?.id ||
+      !resolvedSession ||
+      isPasskeySession(resolvedSession)
+    ) {
+      return null;
+    }
+
+    return {
+      token: resolvedSession.userToken,
+      key: resolvedSession.encryptionKey,
+      walletId: primaryWallet.id,
+    };
+  }, [primaryWallet?.id, session]);
+
   const value = useMemo<CircleWalletContextValue>(
     () => ({
       arcWallet,
@@ -1992,6 +2022,7 @@ export function CircleWalletProvider({
       createContractExecutionChallenge,
       createTypedDataChallenge,
       executeChallenge,
+      getDevCredentials,
       getWalletBalances,
       hasPendingEmailOtp,
       isAuthenticating,
@@ -2005,7 +2036,7 @@ export function CircleWalletProvider({
               ? "Passkey"
             : "Circle",
       logout,
-      primaryWallet: arcWallet ?? sepoliaWallet ?? wallets[0] ?? null,
+      primaryWallet,
       ready,
       refreshWallets: async () => {
         await loadWallets();
@@ -2026,11 +2057,13 @@ export function CircleWalletProvider({
       createContractExecutionChallenge,
       createTypedDataChallenge,
       executeChallenge,
+      getDevCredentials,
       getWalletBalances,
       hasPendingEmailOtp,
       isAuthenticating,
       loadWallets,
       logout,
+      primaryWallet,
       ready,
       requestEmailOtp,
       requestGoogleLogin,
